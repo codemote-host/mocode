@@ -1,4 +1,4 @@
-use mocode_api::{DiagnosticSeverity, EditorError, MocodeEditor, TextPosition};
+use mocode_api::{CompletionKind, DiagnosticSeverity, EditorError, MocodeEditor, TextPosition};
 
 const SAMPLE_TITLE: &str = "examples/configs/dialer-proxy.yaml";
 const SAMPLE_TEXT: &str = include_str!("../../../examples/configs/dialer-proxy.yaml");
@@ -8,6 +8,8 @@ const INSPECT_POSITION: TextPosition = TextPosition::new(10, 17);
 struct DemoLine {
     number: u32,
     text: String,
+    diagnostic_count: usize,
+    diagnostic_severity: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +17,15 @@ struct DemoDiagnostic {
     severity: String,
     code: String,
     message: String,
+    line: Option<u32>,
+    column: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DemoCompletion {
+    label: String,
+    kind: String,
+    documentation: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -27,6 +38,9 @@ struct DemoDocument {
     current_yaml_path: String,
     diagnostics: Vec<DemoDiagnostic>,
     completion_labels: Vec<String>,
+    completion_items: Vec<DemoCompletion>,
+    hover_title: String,
+    hover_body: String,
 }
 
 impl DemoDocument {
@@ -41,6 +55,9 @@ impl DemoDocument {
             current_yaml_path: String::new(),
             diagnostics: Vec::new(),
             completion_labels: Vec::new(),
+            completion_items: Vec::new(),
+            hover_title: String::new(),
+            hover_body: String::new(),
         };
         document.refresh_derived();
         document
@@ -78,17 +95,34 @@ impl DemoDocument {
 
     fn refresh_derived(&mut self) {
         let snapshot = self.editor.snapshot();
+        let semantic_lines = self.editor.semantic_lines();
         self.current_yaml_path = self
             .editor
             .current_yaml_path(self.cursor)
             .map(|path| path.to_string())
             .unwrap_or_else(|| "<none>".to_string());
-        self.completion_labels = self
+        self.completion_items = self
             .editor
             .completions_at(self.cursor)
             .into_iter()
-            .map(|completion| completion.label)
+            .map(|completion| DemoCompletion {
+                label: completion.label,
+                kind: completion_kind_label(completion.kind).to_string(),
+                documentation: completion.documentation,
+            })
             .collect();
+        self.completion_labels = self
+            .completion_items
+            .iter()
+            .map(|completion| completion.label.clone())
+            .collect();
+        if let Some(hover) = self.editor.hover_summary_at(self.cursor) {
+            self.hover_title = hover.title;
+            self.hover_body = hover.body;
+        } else {
+            self.hover_title = "<none>".to_string();
+            self.hover_body.clear();
+        }
         self.diagnostics = snapshot
             .diagnostics
             .into_iter()
@@ -96,14 +130,20 @@ impl DemoDocument {
                 severity: severity_label(diagnostic.severity).to_string(),
                 code: diagnostic.code,
                 message: diagnostic.message,
+                line: diagnostic.range.map(|range| range.start.line + 1),
+                column: diagnostic.range.map(|range| range.start.character + 1),
             })
             .collect();
-        self.lines = snapshot
-            .lines
+        self.lines = semantic_lines
             .into_iter()
             .map(|line| DemoLine {
                 number: line.number,
                 text: line.text,
+                diagnostic_count: line.diagnostics.len(),
+                diagnostic_severity: line
+                    .diagnostics
+                    .first()
+                    .map(|diagnostic| severity_label(diagnostic.severity).to_string()),
             })
             .collect();
         self.line_count = self.lines.len();
@@ -123,8 +163,17 @@ fn severity_label(severity: DiagnosticSeverity) -> &'static str {
     }
 }
 
+fn completion_kind_label(kind: CompletionKind) -> &'static str {
+    match kind {
+        CompletionKind::Field => "field",
+        CompletionKind::EnumValue => "enum",
+        CompletionKind::Reference => "reference",
+        CompletionKind::Snippet => "snippet",
+    }
+}
+
 mod gpui_app {
-    use super::{DemoDiagnostic, DemoDocument, load_demo_document};
+    use super::{DemoCompletion, DemoDiagnostic, DemoDocument, load_demo_document};
     use gpui::{
         App, Application, Bounds, Context, FocusHandle, Focusable, IntoElement, KeyBinding,
         KeyDownEvent, MouseButton, MouseDownEvent, Window, WindowBounds, WindowOptions, actions,
@@ -241,6 +290,7 @@ mod gpui_app {
                         .flex_col()
                         .size_full()
                         .child(header(&self.document))
+                        .child(completion_panel(&self.document))
                         .child(
                             div()
                                 .flex()
@@ -313,7 +363,14 @@ mod gpui_app {
                             let line = &this.document.lines[index];
                             let cursor = (this.document.cursor.line as usize == index)
                                 .then_some(this.document.cursor.character);
-                            rows.push(line_row(index, line.number, line.text.clone(), cursor));
+                            rows.push(line_row(
+                                index,
+                                line.number,
+                                line.text.clone(),
+                                line.diagnostic_count,
+                                line.diagnostic_severity.clone(),
+                                cursor,
+                            ));
                         }
                         rows
                     }),
@@ -322,10 +379,21 @@ mod gpui_app {
             )
     }
 
-    fn line_row(index: usize, number: u32, text: String, cursor: Option<u32>) -> impl IntoElement {
+    fn line_row(
+        index: usize,
+        number: u32,
+        text: String,
+        diagnostic_count: usize,
+        diagnostic_severity: Option<String>,
+        cursor: Option<u32>,
+    ) -> impl IntoElement {
         let (before_cursor, after_cursor) = cursor
             .map(|character| split_at_character(&text, character))
             .unwrap_or_else(|| (text, String::new()));
+        let marker_color = diagnostic_severity
+            .as_deref()
+            .map(severity_color)
+            .unwrap_or_else(|| rgb(0xf8fafc).into());
 
         div()
             .id(index)
@@ -338,10 +406,16 @@ mod gpui_app {
             .child(
                 div()
                     .w(px(64.0))
-                    .px_2()
+                    .flex()
+                    .flex_row()
                     .text_color(rgb(0x94a3b8))
                     .bg(rgb(0xf8fafc))
-                    .child(format!("{number:>4}")),
+                    .child(div().w(px(4.0)).h_full().bg(marker_color))
+                    .child(div().w(px(60.0)).px_2().child(if diagnostic_count == 0 {
+                        format!("{number:>4}")
+                    } else {
+                        format!("{number:>3}!")
+                    })),
             )
             .child(
                 div()
@@ -388,6 +462,14 @@ mod gpui_app {
                     document.completion_labels.join(", ")
                 },
             ))
+            .child(section(
+                "Hover",
+                if document.hover_body.is_empty() {
+                    document.hover_title.clone()
+                } else {
+                    format!("{}\n{}", document.hover_title, document.hover_body)
+                },
+            ))
             .child(
                 div()
                     .flex()
@@ -396,6 +478,36 @@ mod gpui_app {
                     .mt_4()
                     .child(label("Diagnostics"))
                     .children(document.diagnostics.iter().map(diagnostic_row)),
+            )
+    }
+
+    fn completion_panel(document: &DemoDocument) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .px_4()
+            .py_2()
+            .bg(rgb(0xf8fafc))
+            .border_b_1()
+            .border_color(rgb(0xd9e2ec))
+            .child(
+                div()
+                    .w(px(88.0))
+                    .text_color(rgb(0x64748b))
+                    .text_size(px(11.0))
+                    .child("Completions"),
+            )
+            .when(document.completion_items.is_empty(), |this| {
+                this.child(div().text_color(rgb(0x64748b)).child("<none>"))
+            })
+            .children(
+                document
+                    .completion_items
+                    .iter()
+                    .take(6)
+                    .map(completion_item),
             )
     }
 
@@ -422,6 +534,10 @@ mod gpui_app {
     }
 
     fn diagnostic_row(diagnostic: &DemoDiagnostic) -> impl IntoElement {
+        let location = match (diagnostic.line, diagnostic.column) {
+            (Some(line), Some(column)) => format!(" at {line}:{column}"),
+            _ => String::new(),
+        };
         div()
             .flex()
             .flex_col()
@@ -433,13 +549,49 @@ mod gpui_app {
             .child(
                 div()
                     .text_color(severity_color(&diagnostic.severity))
-                    .child(format!("{} {}", diagnostic.severity, diagnostic.code)),
+                    .child(format!(
+                        "{} {}{}",
+                        diagnostic.severity, diagnostic.code, location
+                    )),
             )
             .child(
                 div()
                     .text_color(rgb(0x334155))
                     .line_height(px(18.0))
                     .child(diagnostic.message.clone()),
+            )
+    }
+
+    fn completion_item(completion: &DemoCompletion) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .bg(rgb(0xffffff))
+            .border_1()
+            .border_color(rgb(0xd9e2ec))
+            .child(
+                div()
+                    .text_color(rgb(0x0f172a))
+                    .child(format!("{} {}", completion.kind, completion.label)),
+            )
+            .child(
+                div()
+                    .max_w(px(180.0))
+                    .text_color(rgb(0x64748b))
+                    .text_size(px(11.0))
+                    .line_height(px(14.0))
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(
+                        completion
+                            .documentation
+                            .clone()
+                            .unwrap_or_else(|| "<no docs>".to_string()),
+                    ),
             )
     }
 
@@ -499,6 +651,52 @@ mod tests {
         assert!(document.diagnostics.iter().any(|diagnostic| {
             diagnostic.code == "mihomo.reference.missing"
                 && diagnostic.message.contains("missing-dialer")
+        }));
+    }
+
+    #[test]
+    fn marks_lines_with_ranged_diagnostics_from_core() {
+        let document = DemoDocument::from_text(
+            "invalid-yaml.yaml",
+            include_str!("../../../examples/configs/invalid-yaml.yaml"),
+            TextPosition::new(2, 0),
+        );
+
+        assert!(document.lines.iter().any(|line| line.diagnostic_count > 0));
+        assert!(document.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "yaml.syntax"
+                && diagnostic.line.is_some()
+                && diagnostic.column.is_some()
+        }));
+    }
+
+    #[test]
+    fn carries_hover_summary_for_current_position() {
+        let document = DemoDocument::from_text(
+            "tun.yaml",
+            "tun:\n  stack: system\n",
+            TextPosition::new(1, 4),
+        );
+
+        assert_eq!(document.hover_title, "tun.stack");
+        assert!(document.hover_body.contains("TUN network stack"));
+    }
+
+    #[test]
+    fn carries_completion_item_details_for_panel() {
+        let document = DemoDocument::from_text(
+            "dns.yaml",
+            "dns:\n  enhanced-mode: \n",
+            TextPosition::new(1, 17),
+        );
+
+        assert!(document.completion_items.iter().any(|item| {
+            item.label == "fake-ip"
+                && item.kind == "enum"
+                && item
+                    .documentation
+                    .as_deref()
+                    .is_some_and(|text| !text.is_empty())
         }));
     }
 
