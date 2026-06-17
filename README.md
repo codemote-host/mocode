@@ -24,7 +24,7 @@ mocode/
 
 ## Quick Start
 
-The current implementation includes the first UI-independent editor core and a minimally editable GPUI prototype.
+The current implementation includes the first UI-independent editor core, a minimally editable GPUI prototype, and a read-only Floem semantic display prototype.
 
 ```powershell
 cargo test --workspace
@@ -34,7 +34,9 @@ cargo run -p mocode-floem-demo
 
 `mocode-gpui-demo` uses the shared `mocode-api` facade and keeps Mihomo semantics out of the UI layer. It currently supports the first editable loop: focus the editor surface, type simple text, use Backspace/Delete, move left/right, paste text, and watch the YAML path/completion/diagnostic inspector refresh from core state. Current upstream GPUI README documents Windows support through Win32 windowing and DirectWrite text, so the demo builds the same GPUI adapter on Windows, macOS, and Linux.
 
-`mocode-floem-demo` is still a placeholder until the Floem prototype phase.
+`mocode-floem-demo` uses the same `mocode-api` facade and renders line numbers, virtualized YAML rows, completion items, hover documentation, current YAML path, and diagnostics from shared core state. It is intentionally read-only for now; text editing and input method testing come after Floem reaches semantic display parity.
+
+`examples/configs/large.yaml` is a generated 5000+ line Mihomo sample for prototype loading and scrolling baselines.
 
 ## Development Roadmap
 

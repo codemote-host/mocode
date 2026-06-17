@@ -8,5 +8,6 @@ authors.workspace = true
 description = "Floem prototype adapter for mocode"
 
 [dependencies]
+floem = "0.2.0"
+im = "15.1"
 mocode-api = { path = "../mocode-api" }
-
