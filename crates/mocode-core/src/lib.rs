@@ -470,6 +470,18 @@ mod tests {
     }
 
     #[test]
+    fn loads_twenty_thousand_line_fixture_for_validation_baseline() {
+        let text = include_str!("../../../examples/configs/large-20000.yaml");
+        let editor = MocodeEditor::open_text(text);
+
+        assert!(text.lines().count() >= 20_000);
+        assert!(editor.line_count() >= 20_000);
+        assert_eq!(editor.line_text(0), Some("mixed-port: 7890".to_string()));
+        let diagnostics = editor.diagnostics();
+        assert!(diagnostics.is_empty(), "{diagnostics:#?}");
+    }
+
+    #[test]
     fn returns_read_only_snapshot_for_ui_adapters() {
         let editor = MocodeEditor::open_text("mixed-port: 7890\nproxy-groups:\n  - name: Auto\n");
         let snapshot = editor.snapshot();

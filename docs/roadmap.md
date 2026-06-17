@@ -72,7 +72,7 @@ Deliverables:
 
 Deliverable: [gpui-vs-floem-evaluation.md](gpui-vs-floem-evaluation.md)
 
-Status: initial report available. The current report compares repository-backed prototype facts and keeps final framework selection open until manual IME, scroll, focus, popup, and package-size validation is complete.
+Status: initial report and [prototype-validation-checklist.md](prototype-validation-checklist.md) available. The current report compares repository-backed prototype facts and keeps final framework selection open until manual IME, interactive large-file scroll, focus, popup, and package-size validation is complete.
 
 Evaluation dimensions:
 

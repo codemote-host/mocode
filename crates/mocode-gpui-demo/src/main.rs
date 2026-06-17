@@ -716,6 +716,17 @@ mod tests {
     }
 
     #[test]
+    fn loads_twenty_thousand_line_fixture_for_validation_baseline() {
+        let text = include_str!("../../../examples/configs/large-20000.yaml");
+        let document = DemoDocument::from_text("large-20000.yaml", text, TextPosition::new(0, 0));
+
+        assert!(text.lines().count() >= 20_000);
+        assert!(document.line_count >= 20_000);
+        assert_eq!(document.lines[0].text, "mixed-port: 7890");
+        assert!(document.diagnostics.is_empty());
+    }
+
+    #[test]
     fn edits_document_through_shared_core() {
         let mut document = DemoDocument::from_text(
             "scratch.yaml",

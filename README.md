@@ -36,7 +36,7 @@ cargo run -p mocode-floem-demo
 
 `mocode-floem-demo` uses the same `mocode-api` facade and renders line numbers, virtualized YAML rows, completion items, hover documentation, current YAML path, and diagnostics from shared core state. It now supports the first editable loop: focus the editor surface, type text, use Backspace/Delete, move left/right, paste text, and insert committed IME text. IME preedit display and selection/copy are still later prototype work.
 
-`examples/configs/large.yaml` is a generated 5000+ line Mihomo sample for prototype loading and scrolling baselines.
+`examples/configs/large.yaml` is a generated 5000+ line Mihomo sample for prototype loading and scrolling baselines. `examples/configs/large-20000.yaml` is the current 20000-line loading baseline used by core, GPUI adapter, and Floem adapter tests.
 
 ## Development Roadmap
 
@@ -49,4 +49,4 @@ cargo run -p mocode-floem-demo
 
 See [docs/roadmap.md](docs/roadmap.md).
 
-The first GPUI/Floem comparison is available at [docs/gpui-vs-floem-evaluation.md](docs/gpui-vs-floem-evaluation.md). It is an initial repository-backed evaluation, not a final UI framework selection.
+The first GPUI/Floem comparison is available at [docs/gpui-vs-floem-evaluation.md](docs/gpui-vs-floem-evaluation.md). It is an initial repository-backed evaluation, not a final UI framework selection. The repeatable validation checklist is available at [docs/prototype-validation-checklist.md](docs/prototype-validation-checklist.md).

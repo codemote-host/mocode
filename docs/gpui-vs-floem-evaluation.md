@@ -41,11 +41,18 @@ Verification used for this report:
 - `cargo test --workspace`
 - Source inspection of both demo adapters
 
+Validation harness status:
+
+- [prototype-validation-checklist.md](prototype-validation-checklist.md) defines the repeatable validation procedure.
+- `examples/configs/large-20000.yaml` is available as a 20000-line editor loading baseline.
+- `mocode-core`, `mocode-gpui-demo`, and `mocode-floem-demo` all have automated 20000-line fixture loading tests.
+- Manual Windows IME, interactive large-file scrolling, focus, popup, and release-size measurements are still open.
+
 ## Acceptance Matrix
 
 | Requirement | GPUI Current Status | Floem Current Status | Notes |
 | --- | --- | --- | --- |
-| Load 5000-20000 line YAML | Partial | Partial | Both have automated load tests for `examples/configs/large.yaml` with 5372 lines. 20000-line fixture is not added yet. |
+| Load 5000-20000 line YAML | Partial | Partial | Both have automated adapter-state load tests for `examples/configs/large.yaml` with 5372 lines and `examples/configs/large-20000.yaml` with 20000 lines. Interactive 20000-line scroll testing still needs file-open UI or a sample switcher. |
 | Smooth scrolling | Needs manual validation | Needs manual validation | GPUI uses `uniform_list`; Floem uses `virtual_stack`. No frame timing or screenshot verification yet. |
 | Line numbers | Implemented | Implemented | Both render line gutters. |
 | Cursor movement | Implemented | Implemented | Left/right movement delegates to `mocode-core`. |
@@ -139,18 +146,15 @@ Reasons:
 
 Before choosing GPUI or Floem:
 
-1. Add a 20000-line generated fixture.
-2. Add a small manual test script for Windows Chinese IME:
-   - type Chinese into a YAML scalar
-   - confirm committed text lands at the cursor
-   - check preedit behavior
-   - check cursor location after commit
-3. Add an automated startup/load timing command for `large.yaml`.
-4. Add screenshot-based smoke tests for both demos if the environment supports GUI capture.
-5. Implement selection and copy in both demos.
-6. Implement completion popup positioning in both demos.
-7. Measure packaged binary size for release builds.
-8. Record focus behavior when switching between editor, completion panel, and inspector.
+1. Execute [prototype-validation-checklist.md](prototype-validation-checklist.md) on Windows.
+2. Record Chinese IME commit and preedit behavior for both demos.
+3. Add a file-open UI or sample switcher so `large-20000.yaml` can be tested interactively.
+4. Add an automated startup/load timing command for `large.yaml` and `large-20000.yaml`.
+5. Add screenshot-based smoke tests for both demos if the environment supports GUI capture.
+6. Implement selection and copy in both demos.
+7. Implement completion popup positioning in both demos.
+8. Measure packaged binary size for release builds.
+9. Record focus behavior when switching between editor, completion panel, and inspector.
 
 ## Provisional Scorecard
 
@@ -167,12 +171,4 @@ Before choosing GPUI or Floem:
 
 ## Recommended Next Step
 
-Implement a validation harness rather than another feature slice:
-
-- `docs/prototype-validation-checklist.md`
-- 20000-line fixture
-- manual IME checklist
-- release build size commands
-- repeatable smoke commands for both demos
-
-After that, update this report with measured data and make a real framework recommendation.
+Execute the validation harness and record measured data in this report. The next implementation slice should add a file-open UI or sample switcher before final scroll validation, then selection/copy parity.
