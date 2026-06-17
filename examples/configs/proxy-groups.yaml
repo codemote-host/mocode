@@ -1,0 +1,37 @@
+mixed-port: 7890
+mode: rule
+
+proxies:
+  - name: hk-1
+    type: ss
+    server: hk.example.com
+    port: 443
+    cipher: aes-128-gcm
+    password: password
+  - name: jp-1
+    type: ss
+    server: jp.example.com
+    port: 443
+    cipher: aes-128-gcm
+    password: password
+
+proxy-groups:
+  - name: Auto
+    type: url-test
+    proxies:
+      - hk-1
+      - jp-1
+    url: https://www.gstatic.com/generate_204
+    interval: 300
+  - name: Proxy
+    type: select
+    proxies:
+      - Auto
+      - hk-1
+      - jp-1
+      - DIRECT
+
+rules:
+  - DOMAIN-SUFFIX,example.com,Proxy
+  - MATCH,Proxy
+

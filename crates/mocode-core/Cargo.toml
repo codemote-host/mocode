@@ -1,0 +1,15 @@
+[package]
+name = "mocode-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "UI-independent mocode editor core"
+
+[dependencies]
+mocode-mihomo-lint = { path = "../mocode-mihomo-lint" }
+mocode-mihomo-schema = { path = "../mocode-mihomo-schema" }
+mocode-text = { path = "../mocode-text" }
+mocode-yaml = { path = "../mocode-yaml" }
+

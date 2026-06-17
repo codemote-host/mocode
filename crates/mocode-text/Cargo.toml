@@ -1,0 +1,12 @@
+[package]
+name = "mocode-text"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Text primitives for mocode"
+
+[dependencies]
+ropey = "1.6.1"
+

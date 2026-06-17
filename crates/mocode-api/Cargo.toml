@@ -1,0 +1,16 @@
+[package]
+name = "mocode-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Public API facade for mocode"
+
+[dependencies]
+mocode-core = { path = "../mocode-core" }
+mocode-mihomo-lint = { path = "../mocode-mihomo-lint" }
+mocode-mihomo-schema = { path = "../mocode-mihomo-schema" }
+mocode-text = { path = "../mocode-text" }
+mocode-yaml = { path = "../mocode-yaml" }
+

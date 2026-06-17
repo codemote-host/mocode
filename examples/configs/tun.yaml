@@ -1,0 +1,30 @@
+mixed-port: 7890
+mode: rule
+
+tun:
+  enable: true
+  stack: system
+  auto-route: true
+  auto-detect-interface: true
+  dns-hijack:
+    - 0.0.0.0:53
+  strict-route: true
+
+proxies:
+  - name: hk-1
+    type: ss
+    server: example.com
+    port: 443
+    cipher: aes-128-gcm
+    password: password
+
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - hk-1
+      - DIRECT
+
+rules:
+  - MATCH,Proxy
+

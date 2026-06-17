@@ -1,0 +1,12 @@
+[package]
+name = "mocode-mihomo-lint"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Mihomo semantic linting for mocode"
+
+[dependencies]
+mocode-text = { path = "../mocode-text" }
+

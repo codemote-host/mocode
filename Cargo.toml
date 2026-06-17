@@ -1,0 +1,21 @@
+[workspace]
+members = [
+    "crates/mocode-api",
+    "crates/mocode-core",
+    "crates/mocode-floem-demo",
+    "crates/mocode-gpui-demo",
+    "crates/mocode-mihomo-lint",
+    "crates/mocode-mihomo-schema",
+    "crates/mocode-text",
+    "crates/mocode-yaml",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+authors = ["mocode contributors"]
+description = "Mihomo Config Editor Component"
+

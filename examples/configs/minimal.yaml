@@ -1,0 +1,24 @@
+mixed-port: 7890
+allow-lan: false
+mode: rule
+log-level: info
+ipv6: true
+
+proxies:
+  - name: hk-1
+    type: ss
+    server: example.com
+    port: 443
+    cipher: aes-128-gcm
+    password: password
+
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - hk-1
+      - DIRECT
+
+rules:
+  - MATCH,Proxy
+

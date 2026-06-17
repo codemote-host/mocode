@@ -1,0 +1,24 @@
+mixed-port: 7890
+mode: rule
+
+proxies:
+  - name: hk-1
+    type: ss
+    server: example.com
+    port: 443
+    cipher: aes-128-gcm
+    password: password
+    dialer-proxy: missing-dialer
+
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - hk-1
+      - missing-proxy
+
+rules:
+  - DOMAIN-SUFFIX,example.com,missing-group
+  - RULE-SET,missing-rule-provider,Proxy
+  - MATCH,Proxy
+

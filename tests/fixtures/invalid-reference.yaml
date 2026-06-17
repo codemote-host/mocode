@@ -1,0 +1,12 @@
+mixed-port: 7890
+mode: rule
+
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - missing-proxy
+
+rules:
+  - MATCH,missing-group
+

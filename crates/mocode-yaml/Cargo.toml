@@ -1,0 +1,12 @@
+[package]
+name = "mocode-yaml"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "YAML parsing boundary for mocode"
+
+[dependencies]
+mocode-text = { path = "../mocode-text" }
+

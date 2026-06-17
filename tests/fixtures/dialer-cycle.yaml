@@ -1,0 +1,28 @@
+mixed-port: 7890
+mode: rule
+
+proxies:
+  - name: a
+    type: ss
+    server: a.example.com
+    port: 443
+    cipher: aes-128-gcm
+    password: password
+    dialer-proxy: b
+  - name: b
+    type: ss
+    server: b.example.com
+    port: 443
+    cipher: aes-128-gcm
+    password: password
+    dialer-proxy: a
+
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - a
+
+rules:
+  - MATCH,Proxy
+

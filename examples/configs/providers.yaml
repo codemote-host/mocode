@@ -1,0 +1,35 @@
+mixed-port: 7890
+mode: rule
+
+proxy-providers:
+  remote:
+    type: http
+    url: https://example.com/proxies.yaml
+    path: ./providers/remote.yaml
+    interval: 3600
+    health-check:
+      enable: true
+      url: https://www.gstatic.com/generate_204
+      interval: 300
+
+rule-providers:
+  ads:
+    type: http
+    behavior: domain
+    format: yaml
+    url: https://example.com/ads.yaml
+    path: ./rules/ads.yaml
+    interval: 3600
+
+proxy-groups:
+  - name: Proxy
+    type: select
+    use:
+      - remote
+    proxies:
+      - DIRECT
+
+rules:
+  - RULE-SET,ads,REJECT
+  - MATCH,Proxy
+

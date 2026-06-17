@@ -1,0 +1,37 @@
+mixed-port: 7890
+mode: rule
+
+dns:
+  enable: true
+  listen: 127.0.0.1:1053
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  respect-rules: true
+  default-nameserver:
+    - 223.5.5.5
+    - 1.1.1.1
+  nameserver:
+    - https://dns.alidns.com/dns-query
+    - tls://1.1.1.1:853
+  proxy-server-nameserver:
+    - https://dns.alidns.com/dns-query
+
+proxies:
+  - name: hk-1
+    type: ss
+    server: example.com
+    port: 443
+    cipher: aes-128-gcm
+    password: password
+
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - hk-1
+      - DIRECT
+
+rules:
+  - MATCH,Proxy
+
