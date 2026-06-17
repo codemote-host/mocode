@@ -103,9 +103,14 @@ impl MocodeEditor {
         yaml_errors.chain(lint_errors).collect()
     }
 
-    pub fn completions_at(&self, _position: TextPosition) -> Vec<Completion> {
-        self.schema
-            .root_field_completions()
+    pub fn completions_at(&self, position: TextPosition) -> Vec<Completion> {
+        let schema_completions = self
+            .current_yaml_path(position)
+            .map(|path| self.schema.enum_completions(&path.to_string()))
+            .filter(|completions| !completions.is_empty())
+            .unwrap_or_else(|| self.schema.root_field_completions());
+
+        schema_completions
             .into_iter()
             .map(|completion| Completion {
                 label: completion.label,
@@ -166,5 +171,26 @@ mod tests {
             .collect();
 
         assert!(labels.contains(&"mixed-port".to_string()));
+    }
+
+    #[test]
+    fn returns_enum_completions_for_current_yaml_path() {
+        let editor = MocodeEditor::open_text("dns:\n  enhanced-mode: \n");
+        let labels: Vec<_> = editor
+            .completions_at(TextPosition::new(1, 17))
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+
+        assert!(labels.contains(&"fake-ip".to_string()));
+    }
+
+    #[test]
+    fn returns_hover_for_nested_field() {
+        let editor = MocodeEditor::open_text("tun:\n  stack: system\n");
+        let hover = editor.hover_at(TextPosition::new(1, 4)).unwrap();
+
+        assert_eq!(hover.title, "tun.stack");
+        assert!(hover.markdown.contains("TUN network stack"));
     }
 }

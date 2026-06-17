@@ -54,13 +54,19 @@ impl SchemaCatalog {
     }
 
     pub fn field_doc(&self, path: &str) -> Option<&FieldDoc> {
-        self.fields.iter().find(|field| field.path == path)
+        let normalized = normalize_schema_path(path);
+        self.fields
+            .iter()
+            .find(|field| field.path == path || field.path == normalized)
     }
 
     pub fn root_field_completions(&self) -> Vec<SchemaCompletion> {
         self.fields
             .iter()
-            .filter_map(|field| field.path.split_once('.').is_none().then_some(field))
+            .filter_map(|field| {
+                (field.path.split_once('.').is_none() && !field.path.contains("[]"))
+                    .then_some(field)
+            })
             .map(|field| SchemaCompletion {
                 label: field.path.to_string(),
                 insert_text: format!("{}: ", field.path),
@@ -86,6 +92,36 @@ impl SchemaCatalog {
             })
             .unwrap_or_default()
     }
+}
+
+fn normalize_schema_path(path: &str) -> String {
+    let mut normalized = String::with_capacity(path.len());
+    let mut chars = path.chars().peekable();
+
+    while let Some(char) = chars.next() {
+        if char == '[' {
+            let mut digits = String::new();
+            while let Some(next) = chars.peek().copied() {
+                if next == ']' {
+                    chars.next();
+                    if !digits.is_empty() && digits.chars().all(|digit| digit.is_ascii_digit()) {
+                        normalized.push_str("[]");
+                    } else {
+                        normalized.push('[');
+                        normalized.push_str(&digits);
+                        normalized.push(']');
+                    }
+                    break;
+                }
+                digits.push(next);
+                chars.next();
+            }
+        } else {
+            normalized.push(char);
+        }
+    }
+
+    normalized
 }
 
 pub const BUILTIN_OUTBOUNDS: &[&str] = &[
@@ -163,10 +199,74 @@ pub const DEFAULT_FIELDS: &[FieldDoc] = &[
         source_url: "https://wiki.metacubex.one/en/config/proxies/",
     },
     FieldDoc {
+        path: "proxies[].name",
+        kind: ValueKind::String,
+        summary: "Outbound proxy name.",
+        details: "Defines the name used by proxy groups, rules, listeners, and dialer-proxy references.",
+        enum_values: &[],
+        source_url: "https://wiki.metacubex.one/en/config/proxies/",
+    },
+    FieldDoc {
+        path: "proxies[].type",
+        kind: ValueKind::String,
+        summary: "Outbound proxy protocol type.",
+        details: "Defines the outbound protocol implementation for this proxy entry.",
+        enum_values: &[
+            "direct",
+            "dns",
+            "http",
+            "socks5",
+            "ss",
+            "ssr",
+            "snell",
+            "vmess",
+            "vless",
+            "trojan",
+            "hysteria",
+            "hysteria2",
+            "tuic",
+            "wireguard",
+            "ssh",
+        ],
+        source_url: "https://wiki.metacubex.one/en/config/proxies/",
+    },
+    FieldDoc {
+        path: "proxies[].dialer-proxy",
+        kind: ValueKind::String,
+        summary: "Outbound used to establish this proxy connection.",
+        details: "References a proxy or proxy group. The referenced outbound becomes the dialer path before this proxy connects to its target server.",
+        enum_values: &[],
+        source_url: "https://wiki.metacubex.one/en/config/proxies/dialer-proxy/",
+    },
+    FieldDoc {
         path: "proxy-groups",
         kind: ValueKind::Sequence,
         summary: "Named strategy groups.",
         details: "Groups reference proxies, other groups, built-ins, and providers.",
+        enum_values: &[],
+        source_url: "https://wiki.metacubex.one/en/config/proxy-groups/",
+    },
+    FieldDoc {
+        path: "proxy-groups[].type",
+        kind: ValueKind::String,
+        summary: "Proxy group strategy type.",
+        details: "Determines how a group selects from its member outbounds.",
+        enum_values: &["select", "url-test", "fallback", "load-balance"],
+        source_url: "https://wiki.metacubex.one/en/config/proxy-groups/",
+    },
+    FieldDoc {
+        path: "proxy-groups[].proxies[]",
+        kind: ValueKind::String,
+        summary: "Proxy group member reference.",
+        details: "References a proxy, another proxy group, or a built-in outbound target.",
+        enum_values: &[],
+        source_url: "https://wiki.metacubex.one/en/config/proxy-groups/",
+    },
+    FieldDoc {
+        path: "proxy-groups[].use[]",
+        kind: ValueKind::String,
+        summary: "Proxy provider reference.",
+        details: "References a named proxy provider whose proxies are included in this group.",
         enum_values: &[],
         source_url: "https://wiki.metacubex.one/en/config/proxy-groups/",
     },
@@ -177,6 +277,46 @@ pub const DEFAULT_FIELDS: &[FieldDoc] = &[
         details: "Rules are scalar strings whose target usually names an outbound.",
         enum_values: &[],
         source_url: "https://wiki.metacubex.one/en/config/rules/",
+    },
+    FieldDoc {
+        path: "sniffer",
+        kind: ValueKind::Mapping,
+        summary: "Domain sniffing configuration.",
+        details: "Configures protocol sniffing and domain override behavior.",
+        enum_values: &[],
+        source_url: "https://wiki.metacubex.one/en/config/sniff/",
+    },
+    FieldDoc {
+        path: "listeners",
+        kind: ValueKind::Sequence,
+        summary: "Additional inbound listeners.",
+        details: "Defines named inbound listeners such as http, socks, mixed, redirect, tproxy, tun, and tunnel.",
+        enum_values: &[],
+        source_url: "https://wiki.metacubex.one/en/config/inbound/listeners/",
+    },
+    FieldDoc {
+        path: "proxy-providers",
+        kind: ValueKind::Mapping,
+        summary: "Proxy provider definitions.",
+        details: "Defines named local, remote, or inline proxy sets.",
+        enum_values: &[],
+        source_url: "https://wiki.metacubex.one/en/config/proxy-providers/",
+    },
+    FieldDoc {
+        path: "rule-providers",
+        kind: ValueKind::Mapping,
+        summary: "Rule provider definitions.",
+        details: "Defines named rule sets used by RULE-SET routing rules.",
+        enum_values: &[],
+        source_url: "https://wiki.metacubex.one/en/config/rule-providers/",
+    },
+    FieldDoc {
+        path: "external-controller",
+        kind: ValueKind::String,
+        summary: "REST API listening address.",
+        details: "Enables the external controller API. Binding to public addresses should be paired with a secret and network access controls.",
+        enum_values: &[],
+        source_url: "https://wiki.metacubex.one/en/config/general/",
     },
 ];
 
@@ -194,5 +334,18 @@ mod tests {
             .collect();
 
         assert_eq!(labels, vec!["rule", "global", "direct"]);
+    }
+
+    #[test]
+    fn returns_field_doc_for_indexed_proxy_dialer_proxy_path() {
+        let catalog = SchemaCatalog::default_catalog();
+
+        assert!(
+            catalog
+                .field_doc("proxies[0].dialer-proxy")
+                .unwrap()
+                .details
+                .contains("proxy group")
+        );
     }
 }
