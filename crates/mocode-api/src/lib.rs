@@ -1,5 +1,6 @@
 pub use mocode_core::{
-    Completion, Diagnostic, EditorError, Hover, MocodeEditor, ProxyChainPreview, Reference,
+    Completion, Diagnostic, EditorError, EditorLine, EditorSnapshot, Hover, MocodeEditor,
+    ProxyChainPreview, Reference,
 };
 pub use mocode_mihomo_lint::{DiagnosticSeverity, SemanticIndex};
 pub use mocode_mihomo_schema::{CompletionKind, SchemaCatalog, ValueKind};

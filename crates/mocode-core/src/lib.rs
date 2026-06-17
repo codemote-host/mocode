@@ -40,6 +40,18 @@ pub struct Diagnostic {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditorLine {
+    pub number: u32,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditorSnapshot {
+    pub lines: Vec<EditorLine>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reference {
     pub name: String,
     pub range: TextRange,
@@ -160,6 +172,28 @@ impl MocodeEditor {
 
     pub fn validate(&self) -> Vec<Diagnostic> {
         self.diagnostics()
+    }
+
+    pub fn line_count(&self) -> usize {
+        self.text.line_count()
+    }
+
+    pub fn line_text(&self, line: usize) -> Option<String> {
+        self.text.line_text(line)
+    }
+
+    pub fn snapshot(&self) -> EditorSnapshot {
+        EditorSnapshot {
+            lines: (0..self.line_count())
+                .filter_map(|line| {
+                    Some(EditorLine {
+                        number: u32::try_from(line + 1).ok()?,
+                        text: self.line_text(line)?,
+                    })
+                })
+                .collect(),
+            diagnostics: self.diagnostics(),
+        }
     }
 
     pub fn text(&self) -> String {
@@ -295,6 +329,17 @@ mod tests {
                 .iter()
                 .any(|proxy| proxy.name == "hk-1")
         );
+    }
+
+    #[test]
+    fn returns_read_only_snapshot_for_ui_adapters() {
+        let editor = MocodeEditor::open_text("mixed-port: 7890\nproxy-groups:\n  - name: Auto\n");
+        let snapshot = editor.snapshot();
+
+        assert_eq!(snapshot.lines[0].number, 1);
+        assert_eq!(snapshot.lines[0].text, "mixed-port: 7890");
+        assert_eq!(snapshot.lines[1].number, 2);
+        assert!(snapshot.diagnostics.is_empty());
     }
 
     #[test]

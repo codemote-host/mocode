@@ -93,6 +93,14 @@ impl TextBuffer {
         self.rope.len_lines()
     }
 
+    pub fn line_text(&self, line: usize) -> Option<String> {
+        if line >= self.rope.len_lines() {
+            return None;
+        }
+
+        Some(strip_line_ending(self.rope.line(line).to_string()))
+    }
+
     pub fn len_chars(&self) -> usize {
         self.rope.len_chars()
     }
@@ -131,9 +139,20 @@ impl TextBuffer {
     }
 
     fn line_len_without_ending(&self, line: usize) -> usize {
-        let line_text = self.rope.line(line).to_string();
-        line_text.trim_end_matches(['\r', '\n']).chars().count()
+        strip_line_ending(self.rope.line(line).to_string())
+            .chars()
+            .count()
     }
+}
+
+fn strip_line_ending(mut line: String) -> String {
+    if line.ends_with('\n') {
+        line.pop();
+    }
+    if line.ends_with('\r') {
+        line.pop();
+    }
+    line
 }
 
 #[cfg(test)]
@@ -148,5 +167,15 @@ mod tests {
             .unwrap();
 
         assert_eq!(buffer.as_string(), "mixed-port:  7890\n");
+    }
+
+    #[test]
+    fn returns_line_text_without_line_endings() {
+        let buffer = TextBuffer::open_text("mixed-port: 7890\r\ndns:\n");
+
+        assert_eq!(buffer.line_text(0), Some("mixed-port: 7890".to_string()));
+        assert_eq!(buffer.line_text(1), Some("dns:".to_string()));
+        assert_eq!(buffer.line_text(2), Some(String::new()));
+        assert_eq!(buffer.line_text(3), None);
     }
 }
