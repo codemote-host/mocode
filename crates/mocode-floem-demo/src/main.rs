@@ -4,6 +4,96 @@ use mocode_api::{CompletionKind, DiagnosticSeverity, EditorError, MocodeEditor, 
 const SAMPLE_TITLE: &str = "examples/configs/dialer-proxy.yaml";
 const SAMPLE_TEXT: &str = include_str!("../../../examples/configs/dialer-proxy.yaml");
 const INSPECT_POSITION: TextPosition = TextPosition::new(10, 17);
+const DEFAULT_FIXTURE_ID: &str = "dialer-proxy";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DemoFixture {
+    id: &'static str,
+    label: &'static str,
+    title: &'static str,
+    text: &'static str,
+    inspect_position: TextPosition,
+}
+
+const DEMO_FIXTURES: &[DemoFixture] = &[
+    DemoFixture {
+        id: "dialer-proxy",
+        label: "Dialer",
+        title: SAMPLE_TITLE,
+        text: SAMPLE_TEXT,
+        inspect_position: INSPECT_POSITION,
+    },
+    DemoFixture {
+        id: "minimal",
+        label: "Minimal",
+        title: "examples/configs/minimal.yaml",
+        text: include_str!("../../../examples/configs/minimal.yaml"),
+        inspect_position: TextPosition::new(0, 0),
+    },
+    DemoFixture {
+        id: "dns",
+        label: "DNS",
+        title: "examples/configs/dns.yaml",
+        text: include_str!("../../../examples/configs/dns.yaml"),
+        inspect_position: TextPosition::new(2, 16),
+    },
+    DemoFixture {
+        id: "tun",
+        label: "TUN",
+        title: "examples/configs/tun.yaml",
+        text: include_str!("../../../examples/configs/tun.yaml"),
+        inspect_position: TextPosition::new(2, 4),
+    },
+    DemoFixture {
+        id: "proxy-groups",
+        label: "Groups",
+        title: "examples/configs/proxy-groups.yaml",
+        text: include_str!("../../../examples/configs/proxy-groups.yaml"),
+        inspect_position: TextPosition::new(7, 8),
+    },
+    DemoFixture {
+        id: "providers",
+        label: "Providers",
+        title: "examples/configs/providers.yaml",
+        text: include_str!("../../../examples/configs/providers.yaml"),
+        inspect_position: TextPosition::new(0, 0),
+    },
+    DemoFixture {
+        id: "invalid-yaml",
+        label: "Bad YAML",
+        title: "examples/configs/invalid-yaml.yaml",
+        text: include_str!("../../../examples/configs/invalid-yaml.yaml"),
+        inspect_position: TextPosition::new(2, 0),
+    },
+    DemoFixture {
+        id: "invalid-reference",
+        label: "Bad Ref",
+        title: "examples/configs/invalid-reference.yaml",
+        text: include_str!("../../../examples/configs/invalid-reference.yaml"),
+        inspect_position: TextPosition::new(0, 0),
+    },
+    DemoFixture {
+        id: "dialer-cycle",
+        label: "Cycle",
+        title: "tests/fixtures/dialer-cycle.yaml",
+        text: include_str!("../../../tests/fixtures/dialer-cycle.yaml"),
+        inspect_position: TextPosition::new(0, 0),
+    },
+    DemoFixture {
+        id: "large",
+        label: "Large",
+        title: "examples/configs/large.yaml",
+        text: include_str!("../../../examples/configs/large.yaml"),
+        inspect_position: TextPosition::new(0, 0),
+    },
+    DemoFixture {
+        id: "large-20000",
+        label: "20k",
+        title: "examples/configs/large-20000.yaml",
+        text: include_str!("../../../examples/configs/large-20000.yaml"),
+        inspect_position: TextPosition::new(0, 0),
+    },
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DemoLine {
@@ -158,7 +248,18 @@ impl DemoDocument {
 }
 
 fn load_demo_document() -> DemoDocument {
-    DemoDocument::from_text(SAMPLE_TITLE, SAMPLE_TEXT, INSPECT_POSITION)
+    load_fixture_by_id(DEFAULT_FIXTURE_ID).expect("default fixture must exist")
+}
+
+fn load_fixture_by_id(id: &str) -> Option<DemoDocument> {
+    DEMO_FIXTURES
+        .iter()
+        .find(|fixture| fixture.id == id)
+        .map(load_fixture)
+}
+
+fn load_fixture(fixture: &DemoFixture) -> DemoDocument {
+    DemoDocument::from_text(fixture.title, fixture.text, fixture.inspect_position)
 }
 
 fn completion_kind_label(kind: CompletionKind) -> &'static str {
@@ -220,6 +321,7 @@ fn header(document: DocumentSignal) -> impl floem::IntoView {
                 .style(|style| style.font_size(12.0).color(color(0x5f, 0x6b, 0x7a))),
         ))
         .style(|style| style.flex_col().gap(4.0)),
+        fixture_selector(document),
         dynamic_text_label(move || {
             document.with(|document| format!("{} lines", document.line_count))
         })
@@ -237,6 +339,38 @@ fn header(document: DocumentSignal) -> impl floem::IntoView {
             .border_bottom(1.0)
             .border_color(color(0xd9, 0xe2, 0xec))
     })
+}
+
+fn fixture_selector(document: DocumentSignal) -> impl floem::IntoView {
+    use floem::prelude::*;
+
+    dyn_stack(
+        || DEMO_FIXTURES.to_vec(),
+        |fixture| fixture.id,
+        move |fixture| fixture_button(document, fixture),
+    )
+    .style(|style| style.flex_row().gap(4.0))
+}
+
+fn fixture_button(document: DocumentSignal, fixture: DemoFixture) -> impl floem::IntoView {
+    use floem::prelude::*;
+
+    text_label(fixture.label)
+        .style(|style| {
+            style
+                .padding_horiz(8.0)
+                .padding_vert(4.0)
+                .font_size(11.0)
+                .background(color(0xf8, 0xfa, 0xfc))
+                .border(1.0)
+                .border_color(color(0xd9, 0xe2, 0xec))
+                .color(color(0x33, 0x41, 0x55))
+        })
+        .on_click_stop(move |_| {
+            if let Some(next) = load_fixture_by_id(fixture.id) {
+                document.set(next);
+            }
+        })
 }
 
 fn completion_strip(document: DocumentSignal) -> impl floem::IntoView {
@@ -752,6 +886,23 @@ mod tests {
         assert!(document.line_count >= 20_000);
         assert_eq!(document.lines[0].text, "mixed-port: 7890");
         assert!(document.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn fixture_selector_loads_large_and_diagnostic_samples() {
+        let large = load_fixture_by_id("large-20000").unwrap();
+        assert_eq!(large.title, "examples/configs/large-20000.yaml");
+        assert!(large.line_count >= 20_000);
+        assert!(large.diagnostics.is_empty());
+
+        let invalid_yaml = load_fixture_by_id("invalid-yaml").unwrap();
+        assert_eq!(invalid_yaml.title, "examples/configs/invalid-yaml.yaml");
+        assert!(
+            invalid_yaml
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "yaml.syntax")
+        );
     }
 
     #[test]

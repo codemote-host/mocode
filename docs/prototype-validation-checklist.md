@@ -26,6 +26,20 @@ Do not use this checklist to expand mocode into a full Mihomo GUI. TUN control, 
 
 The 20000-line fixture intentionally avoids a single oversized YAML sequence. A first generated variant with very large continuous sequences triggered a tree-sitter-yaml syntax error around line 16383, which would make UI validation measure parser behavior instead of editor loading and scrolling. A separate semantic-scale parser benchmark can be added later.
 
+Both demos expose the same built-in fixture selector:
+
+- Dialer
+- Minimal
+- DNS
+- TUN
+- Groups
+- Providers
+- Bad YAML
+- Bad Ref
+- Cycle
+- Large
+- 20k
+
 ## Automated Validation
 
 Run these commands from the repository root.
@@ -78,9 +92,9 @@ For each demo, record:
 - Whether diagnostics update after editing invalid YAML.
 - Whether the completion strip updates when the cursor changes.
 - Whether the inspector shows current YAML path, hover summary, and diagnostics.
-- Whether focus returns to the editor after interacting with visible panels.
+- Whether focus returns to the editor after interacting with visible panels and fixture selector buttons.
 
-Current limitation: the demos do not yet have file-open UI or a fixture selector. The automated adapter tests validate `large-20000.yaml` loading into the shared demo state, but interactive 20000-line scroll testing needs a later file-open/sample-switcher slice.
+Use the fixture selector to switch to `Large`, `20k`, `Bad YAML`, `Bad Ref`, and `Cycle`. The selector is intentionally limited to built-in fixtures; it is not a general file-open UI.
 
 ## Windows Chinese IME Script
 
@@ -108,7 +122,7 @@ Record these fields:
 
 ## Scroll And Focus Script
 
-Use the largest file that the current UI can load interactively. Until file-open UI exists, this script is limited to the built-in demo sample and automated `large-20000.yaml` adapter tests.
+Use the fixture selector to load `Large` and `20k` in each demo.
 
 Record:
 
@@ -136,13 +150,13 @@ If a UI cannot place a popup yet, record whether the current completion strip st
 
 ## Diagnostic Script
 
-Use existing automated fixtures and visible demo state:
+Use existing automated fixtures through the selector and tests:
 
 - `examples/configs/invalid-yaml.yaml` should produce a `yaml.syntax` diagnostic.
 - `tests/fixtures/invalid-reference.yaml` should produce a missing-reference diagnostic.
 - `tests/fixtures/dialer-cycle.yaml` should produce a `mihomo.dialer_proxy.cycle` diagnostic.
 
-Current limitation: the demos can display diagnostics from the core state, but they do not yet expose a file switcher for all diagnostic fixtures.
+The selector labels for these are `Bad YAML`, `Bad Ref`, and `Cycle`.
 
 ## Result Record Template
 

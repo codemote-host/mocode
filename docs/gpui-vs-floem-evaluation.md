@@ -12,6 +12,7 @@ Current state:
 
 - GPUI is slightly ahead on editor-like event structure because it has explicit key bindings, focus handles, actions, and a `uniform_list` path that maps naturally to editor rows.
 - Floem is slightly ahead on reactive semantic display and IME committed text because the demo now stores `DemoDocument` in an `RwSignal`, uses `virtual_stack`, and handles `ImeCommit`.
+- Both demos now expose the same built-in fixture selector, including `Large`, `20k`, `Bad YAML`, `Bad Ref`, and `Cycle`.
 - Neither prototype is ready for final selection. The missing decisive data is real manual validation: Chinese IME preedit and commit behavior, smooth scrolling on 5000-20000 lines, focus/popup reliability, selection/copy ergonomics, and packaged binary size.
 
 Provisional recommendation:
@@ -28,8 +29,8 @@ Local versions:
 | UI dependency | `gpui = "0.2.2"` | `floem = "0.2.0"` |
 | Extra direct UI data dependency | none | `im = "15.1"` for `virtual_stack` data |
 | Shared component API | `mocode-api` | `mocode-api` |
-| Source size | 691 lines | 708 lines |
-| Current core size | `mocode-core` is 487 lines | same |
+| Source size | 866 lines | 858 lines |
+| Current core size | `mocode-core` is 497 lines | same |
 | Approximate normal dependency tree lines | 1012 | 506 |
 
 The dependency tree numbers come from local `cargo tree -e normal --prefix none` output and are only a dependency-scale signal. They are not binary size measurements.
@@ -46,13 +47,14 @@ Validation harness status:
 - [prototype-validation-checklist.md](prototype-validation-checklist.md) defines the repeatable validation procedure.
 - `examples/configs/large-20000.yaml` is available as a 20000-line editor loading baseline.
 - `mocode-core`, `mocode-gpui-demo`, and `mocode-floem-demo` all have automated 20000-line fixture loading tests.
+- GPUI and Floem demos expose the same built-in fixture selector for large and diagnostic samples.
 - Manual Windows IME, interactive large-file scrolling, focus, popup, and release-size measurements are still open.
 
 ## Acceptance Matrix
 
 | Requirement | GPUI Current Status | Floem Current Status | Notes |
 | --- | --- | --- | --- |
-| Load 5000-20000 line YAML | Partial | Partial | Both have automated adapter-state load tests for `examples/configs/large.yaml` with 5372 lines and `examples/configs/large-20000.yaml` with 20000 lines. Interactive 20000-line scroll testing still needs file-open UI or a sample switcher. |
+| Load 5000-20000 line YAML | Partial | Partial | Both have automated adapter-state load tests for `examples/configs/large.yaml` and `examples/configs/large-20000.yaml`, plus a built-in selector for interactive loading. Smoothness still needs manual measurement. |
 | Smooth scrolling | Needs manual validation | Needs manual validation | GPUI uses `uniform_list`; Floem uses `virtual_stack`. No frame timing or screenshot verification yet. |
 | Line numbers | Implemented | Implemented | Both render line gutters. |
 | Cursor movement | Implemented | Implemented | Left/right movement delegates to `mocode-core`. |
@@ -66,7 +68,7 @@ Validation harness status:
 | `proxy-groups.proxies` completion | Core implemented, UI path-dependent | Core implemented, UI path-dependent | Core tests cover reference completions. UI needs manual cursor-position checks beyond default sample. |
 | `dialer-proxy` completion | Implemented | Implemented | Default demo position shows outbound reference completions. |
 | Missing reference diagnostic | Implemented | Implemented | Both display diagnostics from core. |
-| `dialer-proxy` cycle diagnostic | Core implemented, UI generic display | Core implemented, UI generic display | UI can display diagnostics, but default sample is not the cycle fixture. |
+| `dialer-proxy` cycle diagnostic | Implemented, needs manual selector check | Implemented, needs manual selector check | The `Cycle` fixture is selectable in both demos. |
 | Current YAML path panel | Implemented | Implemented | Both show current cursor path. |
 | Chain preview panel | Not implemented | Not implemented | `MocodeEditor::proxy_chain_preview_at` still returns `None`. |
 | No copied Mihomo business logic | Pass | Pass | UI adapters map core data to display DTOs only. |
@@ -92,6 +94,7 @@ Implementation details:
 - State methods delegate to `MocodeEditor`: `insert_text`, `backspace`, `delete`, `move_left`, `move_right`.
 - Rendering uses a three-area layout: header, completion strip, editor surface, and inspector.
 - The line row displays cursor by splitting text at the current `TextPosition`.
+- Header fixture buttons rebuild `DemoDocument` from static YAML fixtures through `mocode-api`.
 
 ## Floem Prototype Notes
 
@@ -115,6 +118,7 @@ Implementation details:
 - `DemoDocument` matches the GPUI state boundary and delegates edits to `MocodeEditor`.
 - `DocumentSignal = RwSignal<DemoDocument>` is the only UI state carrier.
 - Line rows use `DemoVisibleLine` to combine immutable line data and cursor position for rendering.
+- Header fixture buttons update the document signal with a fresh core-backed `DemoDocument`.
 
 ## Shared Core Boundary
 
@@ -148,13 +152,13 @@ Before choosing GPUI or Floem:
 
 1. Execute [prototype-validation-checklist.md](prototype-validation-checklist.md) on Windows.
 2. Record Chinese IME commit and preedit behavior for both demos.
-3. Add a file-open UI or sample switcher so `large-20000.yaml` can be tested interactively.
+3. Use the built-in selector to record `Large` and `20k` interactive scroll behavior.
 4. Add an automated startup/load timing command for `large.yaml` and `large-20000.yaml`.
 5. Add screenshot-based smoke tests for both demos if the environment supports GUI capture.
 6. Implement selection and copy in both demos.
 7. Implement completion popup positioning in both demos.
 8. Measure packaged binary size for release builds.
-9. Record focus behavior when switching between editor, completion panel, and inspector.
+9. Record focus behavior when switching between editor, completion panel, fixture selector, and inspector.
 
 ## Provisional Scorecard
 
@@ -171,4 +175,4 @@ Before choosing GPUI or Floem:
 
 ## Recommended Next Step
 
-Execute the validation harness and record measured data in this report. The next implementation slice should add a file-open UI or sample switcher before final scroll validation, then selection/copy parity.
+Execute the validation harness with the built-in selector and record measured data in this report. After that, implement selection/copy parity or completion popup positioning, depending on which manual validation gap is more costly.

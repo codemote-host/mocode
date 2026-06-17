@@ -3,6 +3,96 @@ use mocode_api::{CompletionKind, DiagnosticSeverity, EditorError, MocodeEditor, 
 const SAMPLE_TITLE: &str = "examples/configs/dialer-proxy.yaml";
 const SAMPLE_TEXT: &str = include_str!("../../../examples/configs/dialer-proxy.yaml");
 const INSPECT_POSITION: TextPosition = TextPosition::new(10, 17);
+const DEFAULT_FIXTURE_ID: &str = "dialer-proxy";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DemoFixture {
+    id: &'static str,
+    label: &'static str,
+    title: &'static str,
+    text: &'static str,
+    inspect_position: TextPosition,
+}
+
+const DEMO_FIXTURES: &[DemoFixture] = &[
+    DemoFixture {
+        id: "dialer-proxy",
+        label: "Dialer",
+        title: SAMPLE_TITLE,
+        text: SAMPLE_TEXT,
+        inspect_position: INSPECT_POSITION,
+    },
+    DemoFixture {
+        id: "minimal",
+        label: "Minimal",
+        title: "examples/configs/minimal.yaml",
+        text: include_str!("../../../examples/configs/minimal.yaml"),
+        inspect_position: TextPosition::new(0, 0),
+    },
+    DemoFixture {
+        id: "dns",
+        label: "DNS",
+        title: "examples/configs/dns.yaml",
+        text: include_str!("../../../examples/configs/dns.yaml"),
+        inspect_position: TextPosition::new(2, 16),
+    },
+    DemoFixture {
+        id: "tun",
+        label: "TUN",
+        title: "examples/configs/tun.yaml",
+        text: include_str!("../../../examples/configs/tun.yaml"),
+        inspect_position: TextPosition::new(2, 4),
+    },
+    DemoFixture {
+        id: "proxy-groups",
+        label: "Groups",
+        title: "examples/configs/proxy-groups.yaml",
+        text: include_str!("../../../examples/configs/proxy-groups.yaml"),
+        inspect_position: TextPosition::new(7, 8),
+    },
+    DemoFixture {
+        id: "providers",
+        label: "Providers",
+        title: "examples/configs/providers.yaml",
+        text: include_str!("../../../examples/configs/providers.yaml"),
+        inspect_position: TextPosition::new(0, 0),
+    },
+    DemoFixture {
+        id: "invalid-yaml",
+        label: "Bad YAML",
+        title: "examples/configs/invalid-yaml.yaml",
+        text: include_str!("../../../examples/configs/invalid-yaml.yaml"),
+        inspect_position: TextPosition::new(2, 0),
+    },
+    DemoFixture {
+        id: "invalid-reference",
+        label: "Bad Ref",
+        title: "examples/configs/invalid-reference.yaml",
+        text: include_str!("../../../examples/configs/invalid-reference.yaml"),
+        inspect_position: TextPosition::new(0, 0),
+    },
+    DemoFixture {
+        id: "dialer-cycle",
+        label: "Cycle",
+        title: "tests/fixtures/dialer-cycle.yaml",
+        text: include_str!("../../../tests/fixtures/dialer-cycle.yaml"),
+        inspect_position: TextPosition::new(0, 0),
+    },
+    DemoFixture {
+        id: "large",
+        label: "Large",
+        title: "examples/configs/large.yaml",
+        text: include_str!("../../../examples/configs/large.yaml"),
+        inspect_position: TextPosition::new(0, 0),
+    },
+    DemoFixture {
+        id: "large-20000",
+        label: "20k",
+        title: "examples/configs/large-20000.yaml",
+        text: include_str!("../../../examples/configs/large-20000.yaml"),
+        inspect_position: TextPosition::new(0, 0),
+    },
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DemoLine {
@@ -151,7 +241,18 @@ impl DemoDocument {
 }
 
 fn load_demo_document() -> DemoDocument {
-    DemoDocument::from_text(SAMPLE_TITLE, SAMPLE_TEXT, INSPECT_POSITION)
+    load_fixture_by_id(DEFAULT_FIXTURE_ID).expect("default fixture must exist")
+}
+
+fn load_fixture_by_id(id: &str) -> Option<DemoDocument> {
+    DEMO_FIXTURES
+        .iter()
+        .find(|fixture| fixture.id == id)
+        .map(load_fixture)
+}
+
+fn load_fixture(fixture: &DemoFixture) -> DemoDocument {
+    DemoDocument::from_text(fixture.title, fixture.text, fixture.inspect_position)
 }
 
 fn severity_label(severity: DiagnosticSeverity) -> &'static str {
@@ -173,7 +274,10 @@ fn completion_kind_label(kind: CompletionKind) -> &'static str {
 }
 
 mod gpui_app {
-    use super::{DemoCompletion, DemoDiagnostic, DemoDocument, load_demo_document};
+    use super::{
+        DEMO_FIXTURES, DemoCompletion, DemoDiagnostic, DemoDocument, DemoFixture,
+        load_demo_document, load_fixture_by_id,
+    };
     use gpui::{
         App, Application, Bounds, Context, FocusHandle, Focusable, IntoElement, KeyBinding,
         KeyDownEvent, MouseButton, MouseDownEvent, Window, WindowBounds, WindowOptions, actions,
@@ -269,6 +373,19 @@ mod gpui_app {
         fn focus_editor(&mut self, _: &MouseDownEvent, window: &mut Window, _: &mut Context<Self>) {
             self.focus_handle.focus(window);
         }
+
+        fn select_fixture(
+            &mut self,
+            id: &'static str,
+            window: &mut Window,
+            cx: &mut Context<Self>,
+        ) {
+            if let Some(document) = load_fixture_by_id(id) {
+                self.document = document;
+                self.focus_handle.focus(window);
+                cx.notify();
+            }
+        }
     }
 
     impl Focusable for MocodeGpuiDemo {
@@ -289,7 +406,7 @@ mod gpui_app {
                         .flex()
                         .flex_col()
                         .size_full()
-                        .child(header(&self.document))
+                        .child(header(&self.document, cx))
                         .child(completion_panel(&self.document))
                         .child(
                             div()
@@ -303,7 +420,7 @@ mod gpui_app {
         }
     }
 
-    fn header(document: &DemoDocument) -> impl IntoElement {
+    fn header(document: &DemoDocument, cx: &mut Context<'_, MocodeGpuiDemo>) -> impl IntoElement {
         div()
             .flex()
             .flex_row()
@@ -327,10 +444,51 @@ mod gpui_app {
                             .child(document.title.clone()),
                     ),
             )
+            .child(fixture_selector(cx))
             .child(
                 div()
                     .text_color(rgb(0x5f6b7a))
                     .child(format!("{} lines", document.line_count)),
+            )
+    }
+
+    fn fixture_selector(cx: &mut Context<'_, MocodeGpuiDemo>) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_row()
+            .gap_1()
+            .child(fixture_button(&DEMO_FIXTURES[0], cx))
+            .child(fixture_button(&DEMO_FIXTURES[1], cx))
+            .child(fixture_button(&DEMO_FIXTURES[2], cx))
+            .child(fixture_button(&DEMO_FIXTURES[3], cx))
+            .child(fixture_button(&DEMO_FIXTURES[4], cx))
+            .child(fixture_button(&DEMO_FIXTURES[5], cx))
+            .child(fixture_button(&DEMO_FIXTURES[6], cx))
+            .child(fixture_button(&DEMO_FIXTURES[7], cx))
+            .child(fixture_button(&DEMO_FIXTURES[8], cx))
+            .child(fixture_button(&DEMO_FIXTURES[9], cx))
+            .child(fixture_button(&DEMO_FIXTURES[10], cx))
+    }
+
+    fn fixture_button(
+        fixture: &'static DemoFixture,
+        cx: &mut Context<'_, MocodeGpuiDemo>,
+    ) -> impl IntoElement {
+        let fixture_id = fixture.id;
+        div()
+            .px_2()
+            .py_1()
+            .bg(rgb(0xf8fafc))
+            .border_1()
+            .border_color(rgb(0xd9e2ec))
+            .text_color(rgb(0x334155))
+            .text_size(px(11.0))
+            .child(fixture.label)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, window: &mut Window, cx| {
+                    this.select_fixture(fixture_id, window, cx);
+                }),
             )
     }
 
@@ -724,6 +882,23 @@ mod tests {
         assert!(document.line_count >= 20_000);
         assert_eq!(document.lines[0].text, "mixed-port: 7890");
         assert!(document.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn fixture_selector_loads_large_and_diagnostic_samples() {
+        let large = load_fixture_by_id("large-20000").unwrap();
+        assert_eq!(large.title, "examples/configs/large-20000.yaml");
+        assert!(large.line_count >= 20_000);
+        assert!(large.diagnostics.is_empty());
+
+        let invalid_yaml = load_fixture_by_id("invalid-yaml").unwrap();
+        assert_eq!(invalid_yaml.title, "examples/configs/invalid-yaml.yaml");
+        assert!(
+            invalid_yaml
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "yaml.syntax")
+        );
     }
 
     #[test]
