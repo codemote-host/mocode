@@ -48,3 +48,5 @@ cargo run -p mocode-floem-demo
 6. Phase 5: choose UI framework and continue componentization.
 
 See [docs/roadmap.md](docs/roadmap.md).
+
+The first GPUI/Floem comparison is available at [docs/gpui-vs-floem-evaluation.md](docs/gpui-vs-floem-evaluation.md). It is an initial repository-backed evaluation, not a final UI framework selection.

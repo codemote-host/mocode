@@ -70,7 +70,9 @@ Deliverables:
 
 ## Phase 4: Comparison Evaluation
 
-Deliverable: `docs/gpui-vs-floem-evaluation.md`
+Deliverable: [gpui-vs-floem-evaluation.md](gpui-vs-floem-evaluation.md)
+
+Status: initial report available. The current report compares repository-backed prototype facts and keeps final framework selection open until manual IME, scroll, focus, popup, and package-size validation is complete.
 
 Evaluation dimensions:
 
@@ -94,4 +96,3 @@ Deliverables:
 - host application integration notes
 - full fixture suite
 - compatibility matrix
-
