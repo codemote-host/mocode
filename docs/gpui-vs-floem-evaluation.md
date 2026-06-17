@@ -13,7 +13,8 @@ Current state:
 - GPUI is slightly ahead on editor-like event structure because it has explicit key bindings, focus handles, actions, and a `uniform_list` path that maps naturally to editor rows.
 - Floem is slightly ahead on reactive semantic display and IME committed text because the demo now stores `DemoDocument` in an `RwSignal`, uses `virtual_stack`, and handles `ImeCommit`.
 - Both demos now expose the same built-in fixture selector, including `Large`, `20k`, `Bad YAML`, `Bad Ref`, and `Cycle`.
-- Neither prototype is ready for final selection. The missing decisive data is real manual validation: Chinese IME preedit and commit behavior, smooth scrolling on 5000-20000 lines, focus/popup reliability, selection/copy ergonomics, and packaged binary size.
+- Both demos now expose the same keyboard selection/copy path through Shift+Left/Right and Ctrl/Cmd+C.
+- Neither prototype is ready for final selection. The missing decisive data is real manual validation: Chinese IME preedit and commit behavior, smooth scrolling on 5000-20000 lines, focus/popup reliability, keyboard selection/copy ergonomics, and packaged binary size.
 
 Provisional recommendation:
 
@@ -29,8 +30,8 @@ Local versions:
 | UI dependency | `gpui = "0.2.2"` | `floem = "0.2.0"` |
 | Extra direct UI data dependency | none | `im = "15.1"` for `virtual_stack` data |
 | Shared component API | `mocode-api` | `mocode-api` |
-| Source size | 866 lines | 858 lines |
-| Current core size | `mocode-core` is 497 lines | same |
+| Source size | 979 lines | 956 lines |
+| Current core size | `mocode-core` is 513 lines | same |
 | Approximate normal dependency tree lines | 1012 | 506 |
 
 The dependency tree numbers come from local `cargo tree -e normal --prefix none` output and are only a dependency-scale signal. They are not binary size measurements.
@@ -48,7 +49,8 @@ Validation harness status:
 - `examples/configs/large-20000.yaml` is available as a 20000-line editor loading baseline.
 - `mocode-core`, `mocode-gpui-demo`, and `mocode-floem-demo` all have automated 20000-line fixture loading tests.
 - GPUI and Floem demos expose the same built-in fixture selector for large and diagnostic samples.
-- Manual Windows IME, interactive large-file scrolling, focus, popup, and release-size measurements are still open.
+- GPUI and Floem demos expose the same keyboard selection/copy state path with shared core range extraction.
+- Manual Windows IME, interactive large-file scrolling, keyboard selection/copy ergonomics, focus, popup, and release-size measurements are still open.
 
 ## Acceptance Matrix
 
@@ -58,8 +60,8 @@ Validation harness status:
 | Smooth scrolling | Needs manual validation | Needs manual validation | GPUI uses `uniform_list`; Floem uses `virtual_stack`. No frame timing or screenshot verification yet. |
 | Line numbers | Implemented | Implemented | Both render line gutters. |
 | Cursor movement | Implemented | Implemented | Left/right movement delegates to `mocode-core`. |
-| Text selection | Not implemented | Not implemented | Required before final acceptance. |
-| Copy | Not implemented | Not implemented | Paste exists; copy requires selection first. |
+| Text selection | Keyboard path implemented, needs manual validation | Keyboard path implemented, needs manual validation | Shift+Left/Right extends selection. Mouse drag selection is not implemented. |
+| Copy | Keyboard path implemented, needs manual validation | Keyboard path implemented, needs manual validation | Ctrl/Cmd+C copies selected text through framework clipboard APIs. |
 | Paste | Implemented | Implemented | GPUI uses app clipboard read; Floem uses `Clipboard::get_contents()`. |
 | Chinese IME test | Needs manual validation | Partial | Floem handles `ImeCommit`; neither demo renders IME preedit. GPUI does not yet have explicit IME commit handling. |
 | YAML syntax error rendering | Implemented | Implemented | Diagnostics are displayed from core; row markers exist for ranged diagnostics. |
@@ -95,6 +97,7 @@ Implementation details:
 - Rendering uses a three-area layout: header, completion strip, editor surface, and inspector.
 - The line row displays cursor by splitting text at the current `TextPosition`.
 - Header fixture buttons rebuild `DemoDocument` from static YAML fixtures through `mocode-api`.
+- Selection state is adapter-local, but selected text is extracted by `MocodeEditor::text_in_range`.
 
 ## Floem Prototype Notes
 
@@ -110,7 +113,7 @@ Risks:
 - Input handling is more manually assembled: the demo translates `EventListener::KeyDown`, `ImeCommit`, modifiers, clipboard, and focus requests into document actions.
 - `virtual_stack` required an additional direct `im` dependency for data.
 - IME preedit rendering is not implemented.
-- Selection/copy and popup behavior are still untested.
+- Keyboard selection/copy and popup behavior still need manual validation.
 - API stability and maintenance pace remain open questions from the research phase.
 
 Implementation details:
@@ -119,6 +122,7 @@ Implementation details:
 - `DocumentSignal = RwSignal<DemoDocument>` is the only UI state carrier.
 - Line rows use `DemoVisibleLine` to combine immutable line data and cursor position for rendering.
 - Header fixture buttons update the document signal with a fresh core-backed `DemoDocument`.
+- Selection state is stored in `DemoDocument`, and selected text is extracted by `MocodeEditor::text_in_range`.
 
 ## Shared Core Boundary
 
@@ -139,12 +143,12 @@ Do not select a final framework yet.
 
 Reasons:
 
-- Both demos lack selection/copy.
 - Chain preview is not implemented in core.
 - Neither demo has measured smooth scrolling.
 - Chinese IME is not fully tested; Floem has committed text handling, but preedit display is missing, and GPUI needs explicit IME wiring.
 - Package size is not measured.
 - Popup behavior for completion/hover has not been implemented in either framework.
+- Keyboard selection/copy has automated state coverage, but system clipboard behavior still needs manual validation.
 
 ## Next Validation Checklist
 
@@ -155,7 +159,7 @@ Before choosing GPUI or Floem:
 3. Use the built-in selector to record `Large` and `20k` interactive scroll behavior.
 4. Add an automated startup/load timing command for `large.yaml` and `large-20000.yaml`.
 5. Add screenshot-based smoke tests for both demos if the environment supports GUI capture.
-6. Implement selection and copy in both demos.
+6. Manually validate keyboard selection and system clipboard copy in both demos.
 7. Implement completion popup positioning in both demos.
 8. Measure packaged binary size for release builds.
 9. Record focus behavior when switching between editor, completion panel, fixture selector, and inspector.
@@ -175,4 +179,4 @@ Before choosing GPUI or Floem:
 
 ## Recommended Next Step
 
-Execute the validation harness with the built-in selector and record measured data in this report. After that, implement selection/copy parity or completion popup positioning, depending on which manual validation gap is more costly.
+Execute the validation harness with the built-in selector and record measured data in this report. After that, implement completion popup positioning or chain preview, depending on which manual validation gap is more costly.

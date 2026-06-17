@@ -1,5 +1,7 @@
 use floem::prelude::{SignalUpdate, SignalWith};
-use mocode_api::{CompletionKind, DiagnosticSeverity, EditorError, MocodeEditor, TextPosition};
+use mocode_api::{
+    CompletionKind, DiagnosticSeverity, EditorError, MocodeEditor, TextPosition, TextRange,
+};
 
 const SAMPLE_TITLE: &str = "examples/configs/dialer-proxy.yaml";
 const SAMPLE_TEXT: &str = include_str!("../../../examples/configs/dialer-proxy.yaml");
@@ -137,6 +139,8 @@ struct DemoDocument {
     completion_items: Vec<DemoCompletion>,
     hover_title: String,
     hover_body: String,
+    selection_anchor: Option<TextPosition>,
+    selection_summary: String,
 }
 
 type DocumentSignal = floem::reactive::RwSignal<DemoDocument>;
@@ -155,6 +159,8 @@ impl DemoDocument {
             completion_items: Vec::new(),
             hover_title: String::new(),
             hover_body: String::new(),
+            selection_anchor: None,
+            selection_summary: String::new(),
         };
         document.refresh_derived();
         document
@@ -162,32 +168,60 @@ impl DemoDocument {
 
     fn insert_text(&mut self, text: &str) -> Result<(), EditorError> {
         self.cursor = self.editor.insert_text_at(self.cursor, text)?;
+        self.clear_selection();
         self.refresh_derived();
         Ok(())
     }
 
     fn backspace(&mut self) -> Result<(), EditorError> {
         self.cursor = self.editor.backspace_at(self.cursor)?;
+        self.clear_selection();
         self.refresh_derived();
         Ok(())
     }
 
     fn delete(&mut self) -> Result<(), EditorError> {
         self.cursor = self.editor.delete_at(self.cursor)?;
+        self.clear_selection();
         self.refresh_derived();
         Ok(())
     }
 
     fn move_left(&mut self) -> Result<(), EditorError> {
         self.cursor = self.editor.move_left(self.cursor)?;
+        self.clear_selection();
         self.refresh_derived();
         Ok(())
     }
 
     fn move_right(&mut self) -> Result<(), EditorError> {
         self.cursor = self.editor.move_right(self.cursor)?;
+        self.clear_selection();
         self.refresh_derived();
         Ok(())
+    }
+
+    fn select_left(&mut self) -> Result<(), EditorError> {
+        self.ensure_selection_anchor();
+        self.cursor = self.editor.move_left(self.cursor)?;
+        self.refresh_derived();
+        Ok(())
+    }
+
+    fn select_right(&mut self) -> Result<(), EditorError> {
+        self.ensure_selection_anchor();
+        self.cursor = self.editor.move_right(self.cursor)?;
+        self.refresh_derived();
+        Ok(())
+    }
+
+    fn selected_text(&self) -> Option<String> {
+        let range = self.selected_range()?;
+        self.editor.text_in_range(range).ok()
+    }
+
+    fn copy_selection_text(&self) -> Option<String> {
+        self.selected_text()
     }
 
     fn refresh_derived(&mut self) {
@@ -244,7 +278,41 @@ impl DemoDocument {
             })
             .collect();
         self.line_count = self.lines.len();
+        self.selection_summary = self
+            .selected_range()
+            .map(format_selection_range)
+            .unwrap_or_else(|| "<none>".to_string());
     }
+
+    fn ensure_selection_anchor(&mut self) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor);
+        }
+    }
+
+    fn clear_selection(&mut self) {
+        self.selection_anchor = None;
+    }
+
+    fn selected_range(&self) -> Option<TextRange> {
+        let anchor = self.selection_anchor?;
+        (anchor != self.cursor).then(|| TextRange::new(anchor, self.cursor))
+    }
+}
+
+fn format_selection_range(range: TextRange) -> String {
+    let (start, end) = if range.start <= range.end {
+        (range.start, range.end)
+    } else {
+        (range.end, range.start)
+    };
+    format!(
+        "{}:{} -> {}:{}",
+        start.line + 1,
+        start.character + 1,
+        end.line + 1,
+        end.character + 1
+    )
 }
 
 fn load_demo_document() -> DemoDocument {
@@ -548,6 +616,9 @@ fn inspector(document: DocumentSignal) -> impl floem::IntoView {
                 )
             })
         }),
+        info_section("Selection", move || {
+            document.with(|document| document.selection_summary.clone())
+        }),
         info_section("Hover", move || {
             document.with(|document| {
                 if document.hover_body.is_empty() {
@@ -735,8 +806,16 @@ fn handle_key_down(document: DocumentSignal, event: &floem::event::Event) -> boo
             update_document(document, DemoDocument::delete);
             true
         }
+        Key::Named(NamedKey::ArrowLeft) if modifiers.shift() => {
+            update_document(document, DemoDocument::select_left);
+            true
+        }
         Key::Named(NamedKey::ArrowLeft) => {
             update_document(document, DemoDocument::move_left);
+            true
+        }
+        Key::Named(NamedKey::ArrowRight) if modifiers.shift() => {
+            update_document(document, DemoDocument::select_right);
             true
         }
         Key::Named(NamedKey::ArrowRight) => {
@@ -754,6 +833,12 @@ fn handle_key_down(document: DocumentSignal, event: &floem::event::Event) -> boo
         Key::Character(character) if is_paste_shortcut(character, modifiers) => {
             if let Ok(text) = floem::Clipboard::get_contents() {
                 update_document(document, |document| document.insert_text(&text));
+            }
+            true
+        }
+        Key::Character(character) if is_copy_shortcut(character, modifiers) => {
+            if let Some(text) = document.with(DemoDocument::copy_selection_text) {
+                let _ = floem::Clipboard::set_contents(text);
             }
             true
         }
@@ -787,6 +872,10 @@ fn has_command_modifier(modifiers: floem::keyboard::Modifiers) -> bool {
 
 fn is_paste_shortcut(character: &str, modifiers: floem::keyboard::Modifiers) -> bool {
     (modifiers.control() || modifiers.meta()) && character.eq_ignore_ascii_case("v")
+}
+
+fn is_copy_shortcut(character: &str, modifiers: floem::keyboard::Modifiers) -> bool {
+    (modifiers.control() || modifiers.meta()) && character.eq_ignore_ascii_case("c")
 }
 
 fn is_insertable_text(text: &str) -> bool {
@@ -947,5 +1036,28 @@ mod tests {
         document.delete().unwrap();
         assert_eq!(document.cursor, TextPosition::new(1, 1));
         assert_eq!(document.lines[1].text, " nable: true");
+    }
+
+    #[test]
+    fn selection_copy_uses_shared_core_range() {
+        let mut document = DemoDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enable: true\n",
+            TextPosition::new(1, 2),
+        );
+
+        for _ in 0..6 {
+            document.select_right().unwrap();
+        }
+
+        assert_eq!(document.cursor, TextPosition::new(1, 8));
+        assert_eq!(document.selected_text().unwrap(), "enable");
+        assert_eq!(document.copy_selection_text().unwrap(), "enable");
+        assert_eq!(document.selection_summary, "2:3 -> 2:9");
+
+        document.move_right().unwrap();
+
+        assert!(document.selected_text().is_none());
+        assert_eq!(document.selection_summary, "<none>");
     }
 }

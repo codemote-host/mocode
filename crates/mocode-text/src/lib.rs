@@ -149,6 +149,12 @@ impl TextBuffer {
         Ok(start..end)
     }
 
+    pub fn text_in_range(&self, range: TextRange) -> Result<String, TextEditError> {
+        let range = self.ordered_range(range);
+        let char_range = self.char_range(range)?;
+        Ok(self.rope.slice(char_range).to_string())
+    }
+
     pub fn insert_text_at(
         &mut self,
         position: TextPosition,
@@ -216,6 +222,14 @@ impl TextBuffer {
         strip_line_ending(self.rope.line(line).to_string())
             .chars()
             .count()
+    }
+
+    fn ordered_range(&self, range: TextRange) -> TextRange {
+        if range.start <= range.end {
+            range
+        } else {
+            TextRange::new(range.end, range.start)
+        }
     }
 }
 
@@ -349,6 +363,39 @@ mod tests {
         assert_eq!(
             buffer.move_right(TextPosition::new(1, 0)).unwrap(),
             TextPosition::new(1, 1)
+        );
+    }
+
+    #[test]
+    fn text_in_range_extracts_single_line_multi_line_and_reversed_ranges() {
+        let buffer = TextBuffer::open_text("alpha\nbeta\ngamma\n");
+
+        assert_eq!(
+            buffer
+                .text_in_range(TextRange::new(
+                    TextPosition::new(0, 1),
+                    TextPosition::new(0, 4)
+                ))
+                .unwrap(),
+            "lph"
+        );
+        assert_eq!(
+            buffer
+                .text_in_range(TextRange::new(
+                    TextPosition::new(0, 2),
+                    TextPosition::new(2, 2)
+                ))
+                .unwrap(),
+            "pha\nbeta\nga"
+        );
+        assert_eq!(
+            buffer
+                .text_in_range(TextRange::new(
+                    TextPosition::new(2, 2),
+                    TextPosition::new(0, 2)
+                ))
+                .unwrap(),
+            "pha\nbeta\nga"
         );
     }
 }

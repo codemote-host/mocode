@@ -231,6 +231,10 @@ impl MocodeEditor {
         self.text.line_text(line)
     }
 
+    pub fn text_in_range(&self, range: TextRange) -> Result<String, EditorError> {
+        Ok(self.text.text_in_range(range)?)
+    }
+
     pub fn line_end_position(&self, line: usize) -> Option<TextPosition> {
         self.text.line_end_position(line)
     }
@@ -545,6 +549,21 @@ mod tests {
             TextPosition::new(0, 4)
         );
         assert_eq!(editor.line_text(0), Some("dns: enable: true".to_string()));
+    }
+
+    #[test]
+    fn text_in_range_delegates_to_shared_text_buffer() {
+        let editor = MocodeEditor::open_text("alpha\nbeta\ngamma\n");
+
+        assert_eq!(
+            editor
+                .text_in_range(TextRange::new(
+                    TextPosition::new(2, 2),
+                    TextPosition::new(0, 2)
+                ))
+                .unwrap(),
+            "pha\nbeta\nga"
+        );
     }
 
     #[test]

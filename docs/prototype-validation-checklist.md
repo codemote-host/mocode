@@ -87,11 +87,13 @@ For each demo, record:
 - Whether line numbers render.
 - Whether the editor surface accepts focus.
 - Whether cursor movement works with Left and Right.
+- Whether Shift+Left and Shift+Right extend a text selection.
+- Whether Ctrl+C or Cmd+C copies the selected text to the system clipboard.
 - Whether Backspace and Delete mutate text.
 - Whether paste inserts clipboard text.
 - Whether diagnostics update after editing invalid YAML.
 - Whether the completion strip updates when the cursor changes.
-- Whether the inspector shows current YAML path, hover summary, and diagnostics.
+- Whether the inspector shows current YAML path, selection summary, hover summary, and diagnostics.
 - Whether focus returns to the editor after interacting with visible panels and fixture selector buttons.
 
 Use the fixture selector to switch to `Large`, `20k`, `Bad YAML`, `Bad Ref`, and `Cycle`. The selector is intentionally limited to built-in fixtures; it is not a general file-open UI.
@@ -135,6 +137,19 @@ Record:
 - Whether diagnostics remain attached to the intended lines.
 - Whether CPU usage spikes persist after scrolling stops.
 
+## Selection And Copy Script
+
+Run on both demos:
+
+1. Focus the editor surface.
+2. Move to a scalar text position.
+3. Press Shift+Right several times.
+4. Verify the inspector selection summary changes from `<none>` to a range.
+5. Press Ctrl+C on Windows/Linux or Cmd+C on macOS.
+6. Paste into an external text field and verify the selected YAML text was copied.
+7. Press Right without Shift and verify the selection summary returns to `<none>`.
+8. Repeat Shift+Left from the same line and verify reversed selection still copies the expected text.
+
 ## Completion And Hover Script
 
 Test both demos with the built-in sample:
@@ -172,7 +187,7 @@ Do not select GPUI or Floem until these items are recorded:
 - Windows Chinese IME commit and preedit behavior.
 - Interactive scroll behavior with a 5000-20000 line YAML file.
 - Focus behavior around completion and hover surfaces.
-- Selection and copy ergonomics after those features exist.
+- Keyboard selection and copy ergonomics on both demos.
 - Release binary sizes for both demos.
 - Updated evidence in `docs/gpui-vs-floem-evaluation.md`.
 

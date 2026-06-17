@@ -1,4 +1,6 @@
-use mocode_api::{CompletionKind, DiagnosticSeverity, EditorError, MocodeEditor, TextPosition};
+use mocode_api::{
+    CompletionKind, DiagnosticSeverity, EditorError, MocodeEditor, TextPosition, TextRange,
+};
 
 const SAMPLE_TITLE: &str = "examples/configs/dialer-proxy.yaml";
 const SAMPLE_TEXT: &str = include_str!("../../../examples/configs/dialer-proxy.yaml");
@@ -131,6 +133,8 @@ struct DemoDocument {
     completion_items: Vec<DemoCompletion>,
     hover_title: String,
     hover_body: String,
+    selection_anchor: Option<TextPosition>,
+    selection_summary: String,
 }
 
 impl DemoDocument {
@@ -148,6 +152,8 @@ impl DemoDocument {
             completion_items: Vec::new(),
             hover_title: String::new(),
             hover_body: String::new(),
+            selection_anchor: None,
+            selection_summary: String::new(),
         };
         document.refresh_derived();
         document
@@ -155,32 +161,60 @@ impl DemoDocument {
 
     fn insert_text(&mut self, text: &str) -> Result<(), EditorError> {
         self.cursor = self.editor.insert_text_at(self.cursor, text)?;
+        self.clear_selection();
         self.refresh_derived();
         Ok(())
     }
 
     fn backspace(&mut self) -> Result<(), EditorError> {
         self.cursor = self.editor.backspace_at(self.cursor)?;
+        self.clear_selection();
         self.refresh_derived();
         Ok(())
     }
 
     fn delete(&mut self) -> Result<(), EditorError> {
         self.cursor = self.editor.delete_at(self.cursor)?;
+        self.clear_selection();
         self.refresh_derived();
         Ok(())
     }
 
     fn move_left(&mut self) -> Result<(), EditorError> {
         self.cursor = self.editor.move_left(self.cursor)?;
+        self.clear_selection();
         self.refresh_derived();
         Ok(())
     }
 
     fn move_right(&mut self) -> Result<(), EditorError> {
         self.cursor = self.editor.move_right(self.cursor)?;
+        self.clear_selection();
         self.refresh_derived();
         Ok(())
+    }
+
+    fn select_left(&mut self) -> Result<(), EditorError> {
+        self.ensure_selection_anchor();
+        self.cursor = self.editor.move_left(self.cursor)?;
+        self.refresh_derived();
+        Ok(())
+    }
+
+    fn select_right(&mut self) -> Result<(), EditorError> {
+        self.ensure_selection_anchor();
+        self.cursor = self.editor.move_right(self.cursor)?;
+        self.refresh_derived();
+        Ok(())
+    }
+
+    fn selected_text(&self) -> Option<String> {
+        let range = self.selected_range()?;
+        self.editor.text_in_range(range).ok()
+    }
+
+    fn copy_selection_text(&self) -> Option<String> {
+        self.selected_text()
     }
 
     fn refresh_derived(&mut self) {
@@ -237,7 +271,41 @@ impl DemoDocument {
             })
             .collect();
         self.line_count = self.lines.len();
+        self.selection_summary = self
+            .selected_range()
+            .map(format_selection_range)
+            .unwrap_or_else(|| "<none>".to_string());
     }
+
+    fn ensure_selection_anchor(&mut self) {
+        if self.selection_anchor.is_none() {
+            self.selection_anchor = Some(self.cursor);
+        }
+    }
+
+    fn clear_selection(&mut self) {
+        self.selection_anchor = None;
+    }
+
+    fn selected_range(&self) -> Option<TextRange> {
+        let anchor = self.selection_anchor?;
+        (anchor != self.cursor).then(|| TextRange::new(anchor, self.cursor))
+    }
+}
+
+fn format_selection_range(range: TextRange) -> String {
+    let (start, end) = if range.start <= range.end {
+        (range.start, range.end)
+    } else {
+        (range.end, range.start)
+    };
+    format!(
+        "{}:{} -> {}:{}",
+        start.line + 1,
+        start.character + 1,
+        end.line + 1,
+        end.character + 1
+    )
 }
 
 fn load_demo_document() -> DemoDocument {
@@ -279,12 +347,24 @@ mod gpui_app {
         load_demo_document, load_fixture_by_id,
     };
     use gpui::{
-        App, Application, Bounds, Context, FocusHandle, Focusable, IntoElement, KeyBinding,
-        KeyDownEvent, MouseButton, MouseDownEvent, Window, WindowBounds, WindowOptions, actions,
-        div, prelude::*, px, rgb, size, uniform_list,
+        App, Application, Bounds, ClipboardItem, Context, FocusHandle, Focusable, IntoElement,
+        KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, Window, WindowBounds, WindowOptions,
+        actions, div, prelude::*, px, rgb, size, uniform_list,
     };
 
-    actions!(mocode_editor, [Backspace, Delete, Left, Right, Paste]);
+    actions!(
+        mocode_editor,
+        [
+            Backspace,
+            Delete,
+            Left,
+            Right,
+            SelectLeft,
+            SelectRight,
+            Paste,
+            Copy
+        ]
+    );
 
     pub fn run() {
         Application::new().run(|cx: &mut App| {
@@ -294,8 +374,12 @@ mod gpui_app {
                 KeyBinding::new("delete", Delete, Some("MocodeEditor")),
                 KeyBinding::new("left", Left, Some("MocodeEditor")),
                 KeyBinding::new("right", Right, Some("MocodeEditor")),
+                KeyBinding::new("shift-left", SelectLeft, Some("MocodeEditor")),
+                KeyBinding::new("shift-right", SelectRight, Some("MocodeEditor")),
                 KeyBinding::new("cmd-v", Paste, Some("MocodeEditor")),
                 KeyBinding::new("ctrl-v", Paste, Some("MocodeEditor")),
+                KeyBinding::new("cmd-c", Copy, Some("MocodeEditor")),
+                KeyBinding::new("ctrl-c", Copy, Some("MocodeEditor")),
             ]);
             cx.open_window(
                 WindowOptions {
@@ -343,6 +427,24 @@ mod gpui_app {
         fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
             if self.document.move_right().is_ok() {
                 cx.notify();
+            }
+        }
+
+        fn select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
+            if self.document.select_left().is_ok() {
+                cx.notify();
+            }
+        }
+
+        fn select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
+            if self.document.select_right().is_ok() {
+                cx.notify();
+            }
+        }
+
+        fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+            if let Some(text) = self.document.copy_selection_text() {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
             }
         }
 
@@ -508,7 +610,10 @@ mod gpui_app {
             .on_action(cx.listener(MocodeGpuiDemo::delete))
             .on_action(cx.listener(MocodeGpuiDemo::left))
             .on_action(cx.listener(MocodeGpuiDemo::right))
+            .on_action(cx.listener(MocodeGpuiDemo::select_left))
+            .on_action(cx.listener(MocodeGpuiDemo::select_right))
             .on_action(cx.listener(MocodeGpuiDemo::paste))
+            .on_action(cx.listener(MocodeGpuiDemo::copy))
             .on_key_down(cx.listener(MocodeGpuiDemo::on_key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(MocodeGpuiDemo::focus_editor))
             .child(
@@ -612,6 +717,7 @@ mod gpui_app {
                     document.cursor.character + 1
                 ),
             ))
+            .child(section("Selection", document.selection_summary.clone()))
             .child(section(
                 "Completions",
                 if document.completion_labels.is_empty() {
@@ -938,5 +1044,28 @@ mod tests {
         document.delete().unwrap();
         assert_eq!(document.cursor, TextPosition::new(1, 1));
         assert_eq!(document.lines[1].text, " nable: true");
+    }
+
+    #[test]
+    fn selection_copy_uses_shared_core_range() {
+        let mut document = DemoDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enable: true\n",
+            TextPosition::new(1, 2),
+        );
+
+        for _ in 0..6 {
+            document.select_right().unwrap();
+        }
+
+        assert_eq!(document.cursor, TextPosition::new(1, 8));
+        assert_eq!(document.selected_text().unwrap(), "enable");
+        assert_eq!(document.copy_selection_text().unwrap(), "enable");
+        assert_eq!(document.selection_summary, "2:3 -> 2:9");
+
+        document.move_right().unwrap();
+
+        assert!(document.selected_text().is_none());
+        assert_eq!(document.selection_summary, "<none>");
     }
 }
