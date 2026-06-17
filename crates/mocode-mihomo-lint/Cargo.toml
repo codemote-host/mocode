@@ -8,5 +8,6 @@ authors.workspace = true
 description = "Mihomo semantic linting for mocode"
 
 [dependencies]
+mocode-mihomo-schema = { path = "../mocode-mihomo-schema" }
 mocode-text = { path = "../mocode-text" }
-
+yaml-rust2 = "0.11"
