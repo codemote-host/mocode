@@ -1,4 +1,4 @@
-use mocode_api::{CompletionKind, DiagnosticSeverity, MocodeEditor, TextPosition};
+use mocode_api::{CompletionKind, DiagnosticSeverity, EditorError, MocodeEditor, TextPosition};
 
 const SAMPLE_TITLE: &str = "examples/configs/dialer-proxy.yaml";
 const SAMPLE_TEXT: &str = include_str!("../../../examples/configs/dialer-proxy.yaml");
@@ -59,6 +59,36 @@ impl DemoDocument {
         };
         document.refresh_derived();
         document
+    }
+
+    fn insert_text(&mut self, text: &str) -> Result<(), EditorError> {
+        self.cursor = self.editor.insert_text_at(self.cursor, text)?;
+        self.refresh_derived();
+        Ok(())
+    }
+
+    fn backspace(&mut self) -> Result<(), EditorError> {
+        self.cursor = self.editor.backspace_at(self.cursor)?;
+        self.refresh_derived();
+        Ok(())
+    }
+
+    fn delete(&mut self) -> Result<(), EditorError> {
+        self.cursor = self.editor.delete_at(self.cursor)?;
+        self.refresh_derived();
+        Ok(())
+    }
+
+    fn move_left(&mut self) -> Result<(), EditorError> {
+        self.cursor = self.editor.move_left(self.cursor)?;
+        self.refresh_derived();
+        Ok(())
+    }
+
+    fn move_right(&mut self) -> Result<(), EditorError> {
+        self.cursor = self.editor.move_right(self.cursor)?;
+        self.refresh_derived();
+        Ok(())
     }
 
     fn refresh_derived(&mut self) {
@@ -506,5 +536,49 @@ mod tests {
                 .iter()
                 .any(|item| { item.label == "mixed-port" && item.kind == "field" })
         );
+    }
+
+    #[test]
+    fn edits_document_through_shared_core() {
+        let mut document = DemoDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enhanced-mode: \n",
+            TextPosition::new(1, 17),
+        );
+
+        document.insert_text("fake-ip").unwrap();
+
+        assert_eq!(document.cursor, TextPosition::new(1, 24));
+        assert_eq!(document.lines[1].text, "  enhanced-mode: fake-ip");
+        assert_eq!(document.current_yaml_path, "dns.enhanced-mode");
+        assert!(
+            document
+                .completion_items
+                .iter()
+                .any(|item| item.label == "fake-ip")
+        );
+    }
+
+    #[test]
+    fn backspaces_deletes_and_moves_cursor_in_demo_state() {
+        let mut document = DemoDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enable: true\n",
+            TextPosition::new(1, 2),
+        );
+
+        document.backspace().unwrap();
+        assert_eq!(document.cursor, TextPosition::new(1, 1));
+        assert_eq!(document.lines[1].text, " enable: true");
+
+        document.move_left().unwrap();
+        assert_eq!(document.cursor, TextPosition::new(1, 0));
+
+        document.move_right().unwrap();
+        assert_eq!(document.cursor, TextPosition::new(1, 1));
+
+        document.delete().unwrap();
+        assert_eq!(document.cursor, TextPosition::new(1, 1));
+        assert_eq!(document.lines[1].text, " nable: true");
     }
 }
