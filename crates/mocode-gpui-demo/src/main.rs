@@ -701,6 +701,21 @@ mod tests {
     }
 
     #[test]
+    fn loads_large_fixture_for_scroll_baseline() {
+        let text = include_str!("../../../examples/configs/large.yaml");
+        let document = DemoDocument::from_text("large.yaml", text, TextPosition::new(0, 0));
+
+        assert!(text.lines().count() >= 5_000);
+        assert!(document.line_count >= 5_000);
+        assert_eq!(document.lines[0].text, "mixed-port: 7890");
+        assert!(
+            document
+                .completion_labels
+                .contains(&"mixed-port".to_string())
+        );
+    }
+
+    #[test]
     fn edits_document_through_shared_core() {
         let mut document = DemoDocument::from_text(
             "scratch.yaml",
