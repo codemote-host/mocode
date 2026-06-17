@@ -2,7 +2,7 @@ use mocode_mihomo_lint::{DiagnosticSeverity, SemanticIndex, validate_index};
 use mocode_mihomo_schema::{BUILTIN_OUTBOUNDS, CompletionKind, SchemaCatalog};
 use mocode_text::{TextBuffer, TextEdit, TextEditError, TextPosition, TextRange};
 use mocode_yaml::{YamlDocument, YamlPath};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditorError {
@@ -37,6 +37,27 @@ pub struct Diagnostic {
     pub code: String,
     pub message: String,
     pub range: Option<TextRange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LineDiagnostic {
+    pub severity: DiagnosticSeverity,
+    pub code: String,
+    pub message: String,
+    pub column: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticLine {
+    pub number: u32,
+    pub text: String,
+    pub diagnostics: Vec<LineDiagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HoverSummary {
+    pub title: String,
+    pub body: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,6 +195,14 @@ impl MocodeEditor {
         })
     }
 
+    pub fn hover_summary_at(&self, position: TextPosition) -> Option<HoverSummary> {
+        let hover = self.hover_at(position)?;
+        Some(HoverSummary {
+            title: hover.title,
+            body: first_markdown_paragraph(&hover.markdown),
+        })
+    }
+
     pub fn current_yaml_path(&self, position: TextPosition) -> Option<YamlPath> {
         self.yaml.path_at(position)
     }
@@ -226,6 +255,38 @@ impl MocodeEditor {
                 .collect(),
             diagnostics: self.diagnostics(),
         }
+    }
+
+    pub fn semantic_lines(&self) -> Vec<SemanticLine> {
+        let mut diagnostics_by_line = BTreeMap::<u32, Vec<LineDiagnostic>>::new();
+        for diagnostic in self.diagnostics() {
+            let Some(range) = diagnostic.range else {
+                continue;
+            };
+
+            diagnostics_by_line
+                .entry(range.start.line)
+                .or_default()
+                .push(LineDiagnostic {
+                    severity: diagnostic.severity,
+                    code: diagnostic.code,
+                    message: diagnostic.message,
+                    column: Some(range.start.character),
+                });
+        }
+
+        (0..self.line_count())
+            .filter_map(|line| {
+                let number = u32::try_from(line + 1).ok()?;
+                Some(SemanticLine {
+                    number,
+                    text: self.line_text(line)?,
+                    diagnostics: diagnostics_by_line
+                        .remove(&u32::try_from(line).ok()?)
+                        .unwrap_or_default(),
+                })
+            })
+            .collect()
     }
 
     pub fn text(&self) -> String {
@@ -292,6 +353,16 @@ fn reference_completion(name: &str) -> mocode_mihomo_schema::SchemaCompletion {
     }
 }
 
+fn first_markdown_paragraph(markdown: &str) -> String {
+    markdown
+        .split("\n\n")
+        .find_map(|paragraph| {
+            let trimmed = paragraph.trim();
+            (!trimmed.is_empty()).then(|| trimmed.replace('\n', " "))
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,6 +398,35 @@ mod tests {
 
         assert_eq!(hover.title, "tun.stack");
         assert!(hover.markdown.contains("TUN network stack"));
+    }
+
+    #[test]
+    fn returns_compact_hover_summary_for_ui_adapters() {
+        let editor = MocodeEditor::open_text("tun:\n  stack: system\n");
+        let hover = editor.hover_summary_at(TextPosition::new(1, 4)).unwrap();
+
+        assert_eq!(hover.title, "tun.stack");
+        assert!(hover.body.contains("TUN network stack"));
+        assert!(!hover.body.contains("\n\n"));
+    }
+
+    #[test]
+    fn groups_ranged_diagnostics_by_line_for_ui_adapters() {
+        let editor =
+            MocodeEditor::open_text(include_str!("../../../examples/configs/invalid-yaml.yaml"));
+        let lines = editor.semantic_lines();
+
+        assert!(lines.iter().any(|line| {
+            line.diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "yaml.syntax")
+        }));
+        assert!(
+            lines
+                .iter()
+                .flat_map(|line| &line.diagnostics)
+                .all(|diagnostic| diagnostic.column.is_some())
+        );
     }
 
     #[test]
