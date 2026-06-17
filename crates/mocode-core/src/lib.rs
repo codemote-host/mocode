@@ -84,10 +84,30 @@ impl MocodeEditor {
 
     pub fn apply_edit(&mut self, edit: TextEdit) -> Result<(), EditorError> {
         self.text.apply_edit(edit)?;
-        let text = self.text.as_string();
-        self.yaml = YamlDocument::parse(&text);
-        self.semantic_index = SemanticIndex::from_yaml_str(&text);
+        self.refresh_indexes();
         Ok(())
+    }
+
+    pub fn insert_text_at(
+        &mut self,
+        position: TextPosition,
+        text: &str,
+    ) -> Result<TextPosition, EditorError> {
+        let cursor = self.text.insert_text_at(position, text)?;
+        self.refresh_indexes();
+        Ok(cursor)
+    }
+
+    pub fn backspace_at(&mut self, position: TextPosition) -> Result<TextPosition, EditorError> {
+        let cursor = self.text.backspace_at(position)?;
+        self.refresh_indexes();
+        Ok(cursor)
+    }
+
+    pub fn delete_at(&mut self, position: TextPosition) -> Result<TextPosition, EditorError> {
+        let cursor = self.text.delete_at(position)?;
+        self.refresh_indexes();
+        Ok(cursor)
     }
 
     pub fn format(&self) -> Result<String, EditorError> {
@@ -182,6 +202,18 @@ impl MocodeEditor {
         self.text.line_text(line)
     }
 
+    pub fn line_end_position(&self, line: usize) -> Option<TextPosition> {
+        self.text.line_end_position(line)
+    }
+
+    pub fn move_left(&self, position: TextPosition) -> Result<TextPosition, EditorError> {
+        Ok(self.text.move_left(position)?)
+    }
+
+    pub fn move_right(&self, position: TextPosition) -> Result<TextPosition, EditorError> {
+        Ok(self.text.move_right(position)?)
+    }
+
     pub fn snapshot(&self) -> EditorSnapshot {
         EditorSnapshot {
             lines: (0..self.line_count())
@@ -234,6 +266,12 @@ impl MocodeEditor {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect()
+    }
+
+    fn refresh_indexes(&mut self) {
+        let text = self.text.as_string();
+        self.yaml = YamlDocument::parse(&text);
+        self.semantic_index = SemanticIndex::from_yaml_str(&text);
     }
 }
 
@@ -340,6 +378,61 @@ mod tests {
         assert_eq!(snapshot.lines[0].text, "mixed-port: 7890");
         assert_eq!(snapshot.lines[1].number, 2);
         assert!(snapshot.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn inserts_text_through_core_and_recomputes_semantics() {
+        let mut editor = MocodeEditor::open_text(
+            "proxy-groups:\n  - name: Proxy\n    type: select\n    proxies:\n      - missing\n",
+        );
+        assert!(
+            editor
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "mihomo.reference.missing")
+        );
+
+        let cursor = editor
+            .insert_text_at(
+                TextPosition::new(0, 0),
+                "proxies:\n  - name: missing\n    type: ss\n",
+            )
+            .unwrap();
+
+        assert_eq!(cursor, TextPosition::new(3, 0));
+        assert!(
+            editor
+                .diagnostics()
+                .iter()
+                .all(|diagnostic| diagnostic.code != "mihomo.reference.missing")
+        );
+    }
+
+    #[test]
+    fn exposes_core_cursor_movement_and_delete_helpers() {
+        let mut editor = MocodeEditor::open_text("dns:\n  enable: true\n");
+
+        assert_eq!(editor.line_end_position(0), Some(TextPosition::new(0, 4)));
+        assert_eq!(
+            editor.move_left(TextPosition::new(1, 0)).unwrap(),
+            TextPosition::new(0, 4)
+        );
+        assert_eq!(
+            editor.move_right(TextPosition::new(0, 4)).unwrap(),
+            TextPosition::new(1, 0)
+        );
+
+        assert_eq!(
+            editor.backspace_at(TextPosition::new(1, 2)).unwrap(),
+            TextPosition::new(1, 1)
+        );
+        assert_eq!(editor.line_text(1), Some(" enable: true".to_string()));
+
+        assert_eq!(
+            editor.delete_at(TextPosition::new(0, 4)).unwrap(),
+            TextPosition::new(0, 4)
+        );
+        assert_eq!(editor.line_text(0), Some("dns: enable: true".to_string()));
     }
 
     #[test]
