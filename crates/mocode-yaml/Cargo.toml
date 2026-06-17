@@ -9,4 +9,5 @@ description = "YAML parsing boundary for mocode"
 
 [dependencies]
 mocode-text = { path = "../mocode-text" }
-
+tree-sitter = "0.25"
+tree-sitter-yaml = "0.7.2"
