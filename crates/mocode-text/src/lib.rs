@@ -101,6 +101,17 @@ impl TextBuffer {
         Some(strip_line_ending(self.rope.line(line).to_string()))
     }
 
+    pub fn line_end_position(&self, line: usize) -> Option<TextPosition> {
+        if line >= self.rope.len_lines() {
+            return None;
+        }
+
+        Some(TextPosition::new(
+            u32::try_from(line).ok()?,
+            u32::try_from(self.line_len_without_ending(line)).ok()?,
+        ))
+    }
+
     pub fn len_chars(&self) -> usize {
         self.rope.len_chars()
     }
@@ -138,6 +149,69 @@ impl TextBuffer {
         Ok(start..end)
     }
 
+    pub fn insert_text_at(
+        &mut self,
+        position: TextPosition,
+        text: &str,
+    ) -> Result<TextPosition, TextEditError> {
+        self.apply_edit(TextEdit::insert(position, text))?;
+        Ok(position_after_insert(position, text))
+    }
+
+    pub fn backspace_at(&mut self, position: TextPosition) -> Result<TextPosition, TextEditError> {
+        self.char_index(position)?;
+        if position.line == 0 && position.character == 0 {
+            return Ok(position);
+        }
+
+        let previous = self.move_left(position)?;
+        self.apply_edit(TextEdit::delete(TextRange::new(previous, position)))?;
+        Ok(previous)
+    }
+
+    pub fn delete_at(&mut self, position: TextPosition) -> Result<TextPosition, TextEditError> {
+        self.char_index(position)?;
+        let next = self.move_right(position)?;
+        if next == position {
+            return Ok(position);
+        }
+
+        self.apply_edit(TextEdit::delete(TextRange::new(position, next)))?;
+        Ok(position)
+    }
+
+    pub fn move_left(&self, position: TextPosition) -> Result<TextPosition, TextEditError> {
+        self.char_index(position)?;
+        if position.character > 0 {
+            return Ok(TextPosition::new(position.line, position.character - 1));
+        }
+
+        if position.line == 0 {
+            return Ok(position);
+        }
+
+        let previous_line = position.line - 1;
+        self.line_end_position(previous_line as usize)
+            .ok_or(TextEditError::PositionOutOfBounds(position))
+    }
+
+    pub fn move_right(&self, position: TextPosition) -> Result<TextPosition, TextEditError> {
+        self.char_index(position)?;
+        let line_end = self
+            .line_end_position(position.line as usize)
+            .ok_or(TextEditError::PositionOutOfBounds(position))?;
+        if position.character < line_end.character {
+            return Ok(TextPosition::new(position.line, position.character + 1));
+        }
+
+        let next_line = position.line + 1;
+        if next_line as usize >= self.rope.len_lines() {
+            return Ok(position);
+        }
+
+        Ok(TextPosition::new(next_line, 0))
+    }
+
     fn line_len_without_ending(&self, line: usize) -> usize {
         strip_line_ending(self.rope.line(line).to_string())
             .chars()
@@ -153,6 +227,36 @@ fn strip_line_ending(mut line: String) -> String {
         line.pop();
     }
     line
+}
+
+fn position_after_insert(start: TextPosition, text: &str) -> TextPosition {
+    let mut line = start.line;
+    let mut character = start.character;
+    let mut saw_carriage_return = false;
+
+    for ch in text.chars() {
+        match ch {
+            '\r' => {
+                line += 1;
+                character = 0;
+                saw_carriage_return = true;
+            }
+            '\n' if saw_carriage_return => {
+                saw_carriage_return = false;
+            }
+            '\n' => {
+                line += 1;
+                character = 0;
+                saw_carriage_return = false;
+            }
+            _ => {
+                character += 1;
+                saw_carriage_return = false;
+            }
+        }
+    }
+
+    TextPosition::new(line, character)
 }
 
 #[cfg(test)]
@@ -177,5 +281,74 @@ mod tests {
         assert_eq!(buffer.line_text(1), Some("dns:".to_string()));
         assert_eq!(buffer.line_text(2), Some(String::new()));
         assert_eq!(buffer.line_text(3), None);
+    }
+
+    #[test]
+    fn returns_line_end_positions() {
+        let buffer = TextBuffer::open_text("mixed-port: 7890\ndns:\n");
+
+        assert_eq!(buffer.line_end_position(0), Some(TextPosition::new(0, 16)));
+        assert_eq!(buffer.line_end_position(1), Some(TextPosition::new(1, 4)));
+        assert_eq!(buffer.line_end_position(2), Some(TextPosition::new(2, 0)));
+        assert_eq!(buffer.line_end_position(3), None);
+    }
+
+    #[test]
+    fn inserts_text_and_returns_cursor_after_insert() {
+        let mut buffer = TextBuffer::open_text("dns:\n");
+        let cursor = buffer
+            .insert_text_at(TextPosition::new(0, 4), "\n  enable: true")
+            .unwrap();
+
+        assert_eq!(buffer.as_string(), "dns:\n  enable: true\n");
+        assert_eq!(cursor, TextPosition::new(1, 14));
+    }
+
+    #[test]
+    fn backspaces_inside_line_and_across_line_boundary() {
+        let mut buffer = TextBuffer::open_text("dns:\n  enable: true\n");
+
+        let cursor = buffer.backspace_at(TextPosition::new(1, 2)).unwrap();
+        assert_eq!(buffer.as_string(), "dns:\n enable: true\n");
+        assert_eq!(cursor, TextPosition::new(1, 1));
+
+        let cursor = buffer.backspace_at(TextPosition::new(1, 0)).unwrap();
+        assert_eq!(buffer.as_string(), "dns: enable: true\n");
+        assert_eq!(cursor, TextPosition::new(0, 4));
+    }
+
+    #[test]
+    fn deletes_inside_line_and_across_line_boundary() {
+        let mut buffer = TextBuffer::open_text("dns:\n  enable: true\n");
+
+        let cursor = buffer.delete_at(TextPosition::new(1, 1)).unwrap();
+        assert_eq!(buffer.as_string(), "dns:\n enable: true\n");
+        assert_eq!(cursor, TextPosition::new(1, 1));
+
+        let cursor = buffer.delete_at(TextPosition::new(0, 4)).unwrap();
+        assert_eq!(buffer.as_string(), "dns: enable: true\n");
+        assert_eq!(cursor, TextPosition::new(0, 4));
+    }
+
+    #[test]
+    fn moves_cursor_left_and_right_across_lines() {
+        let buffer = TextBuffer::open_text("dns:\n  enable: true\n");
+
+        assert_eq!(
+            buffer.move_left(TextPosition::new(1, 0)).unwrap(),
+            TextPosition::new(0, 4)
+        );
+        assert_eq!(
+            buffer.move_left(TextPosition::new(0, 0)).unwrap(),
+            TextPosition::new(0, 0)
+        );
+        assert_eq!(
+            buffer.move_right(TextPosition::new(0, 4)).unwrap(),
+            TextPosition::new(1, 0)
+        );
+        assert_eq!(
+            buffer.move_right(TextPosition::new(1, 0)).unwrap(),
+            TextPosition::new(1, 1)
+        );
     }
 }
