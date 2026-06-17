@@ -1,4 +1,4 @@
-use mocode_api::{DiagnosticSeverity, MocodeEditor, TextPosition};
+use mocode_api::{DiagnosticSeverity, EditorError, MocodeEditor, TextPosition};
 
 const SAMPLE_TITLE: &str = "examples/configs/dialer-proxy.yaml";
 const SAMPLE_TEXT: &str = include_str!("../../../examples/configs/dialer-proxy.yaml");
@@ -17,9 +17,11 @@ struct DemoDiagnostic {
     message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 struct DemoDocument {
     title: String,
+    editor: MocodeEditor,
+    cursor: TextPosition,
     line_count: usize,
     lines: Vec<DemoLine>,
     current_yaml_path: String,
@@ -30,17 +32,64 @@ struct DemoDocument {
 impl DemoDocument {
     fn from_text(title: impl Into<String>, text: &str, inspect_position: TextPosition) -> Self {
         let editor = MocodeEditor::open_text(text);
-        let snapshot = editor.snapshot();
-        let current_yaml_path = editor
-            .current_yaml_path(inspect_position)
+        let mut document = Self {
+            title: title.into(),
+            editor,
+            cursor: inspect_position,
+            line_count: 0,
+            lines: Vec::new(),
+            current_yaml_path: String::new(),
+            diagnostics: Vec::new(),
+            completion_labels: Vec::new(),
+        };
+        document.refresh_derived();
+        document
+    }
+
+    fn insert_text(&mut self, text: &str) -> Result<(), EditorError> {
+        self.cursor = self.editor.insert_text_at(self.cursor, text)?;
+        self.refresh_derived();
+        Ok(())
+    }
+
+    fn backspace(&mut self) -> Result<(), EditorError> {
+        self.cursor = self.editor.backspace_at(self.cursor)?;
+        self.refresh_derived();
+        Ok(())
+    }
+
+    fn delete(&mut self) -> Result<(), EditorError> {
+        self.cursor = self.editor.delete_at(self.cursor)?;
+        self.refresh_derived();
+        Ok(())
+    }
+
+    fn move_left(&mut self) -> Result<(), EditorError> {
+        self.cursor = self.editor.move_left(self.cursor)?;
+        self.refresh_derived();
+        Ok(())
+    }
+
+    fn move_right(&mut self) -> Result<(), EditorError> {
+        self.cursor = self.editor.move_right(self.cursor)?;
+        self.refresh_derived();
+        Ok(())
+    }
+
+    fn refresh_derived(&mut self) {
+        let snapshot = self.editor.snapshot();
+        self.current_yaml_path = self
+            .editor
+            .current_yaml_path(self.cursor)
             .map(|path| path.to_string())
             .unwrap_or_else(|| "<none>".to_string());
-        let completion_labels = editor
-            .completions_at(inspect_position)
+        self.completion_labels = self
+            .editor
+            .completions_at(self.cursor)
             .into_iter()
             .map(|completion| completion.label)
             .collect();
-        let diagnostics = snapshot
+        self.diagnostics = snapshot
             .diagnostics
             .into_iter()
             .map(|diagnostic| DemoDiagnostic {
@@ -49,7 +98,7 @@ impl DemoDocument {
                 message: diagnostic.message,
             })
             .collect();
-        let lines: Vec<DemoLine> = snapshot
+        self.lines = snapshot
             .lines
             .into_iter()
             .map(|line| DemoLine {
@@ -57,15 +106,7 @@ impl DemoDocument {
                 text: line.text,
             })
             .collect();
-
-        Self {
-            title: title.into(),
-            line_count: lines.len(),
-            lines,
-            current_yaml_path,
-            diagnostics,
-            completion_labels,
-        }
+        self.line_count = self.lines.len();
     }
 }
 
@@ -85,21 +126,35 @@ fn severity_label(severity: DiagnosticSeverity) -> &'static str {
 mod gpui_app {
     use super::{DemoDiagnostic, DemoDocument, load_demo_document};
     use gpui::{
-        App, Application, Bounds, Context, IntoElement, Window, WindowBounds, WindowOptions, div,
-        prelude::*, px, rgb, size, uniform_list,
+        App, Application, Bounds, Context, FocusHandle, Focusable, IntoElement, KeyBinding,
+        KeyDownEvent, MouseButton, MouseDownEvent, Window, WindowBounds, WindowOptions, actions,
+        div, prelude::*, px, rgb, size, uniform_list,
     };
+
+    actions!(mocode_editor, [Backspace, Delete, Left, Right, Paste]);
 
     pub fn run() {
         Application::new().run(|cx: &mut App| {
             let bounds = Bounds::centered(None, size(px(1120.0), px(720.0)), cx);
+            cx.bind_keys([
+                KeyBinding::new("backspace", Backspace, Some("MocodeEditor")),
+                KeyBinding::new("delete", Delete, Some("MocodeEditor")),
+                KeyBinding::new("left", Left, Some("MocodeEditor")),
+                KeyBinding::new("right", Right, Some("MocodeEditor")),
+                KeyBinding::new("cmd-v", Paste, Some("MocodeEditor")),
+                KeyBinding::new("ctrl-v", Paste, Some("MocodeEditor")),
+            ]);
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     ..Default::default()
                 },
-                |_, cx| {
+                |window, cx| {
+                    let focus_handle = cx.focus_handle().tab_stop(true);
+                    focus_handle.focus(window);
                     cx.new(|_| MocodeGpuiDemo {
                         document: load_demo_document(),
+                        focus_handle,
                     })
                 },
             )
@@ -110,6 +165,67 @@ mod gpui_app {
 
     struct MocodeGpuiDemo {
         document: DemoDocument,
+        focus_handle: FocusHandle,
+    }
+
+    impl MocodeGpuiDemo {
+        fn backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<Self>) {
+            if self.document.backspace().is_ok() {
+                cx.notify();
+            }
+        }
+
+        fn delete(&mut self, _: &Delete, _: &mut Window, cx: &mut Context<Self>) {
+            if self.document.delete().is_ok() {
+                cx.notify();
+            }
+        }
+
+        fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
+            if self.document.move_left().is_ok() {
+                cx.notify();
+            }
+        }
+
+        fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
+            if self.document.move_right().is_ok() {
+                cx.notify();
+            }
+        }
+
+        fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
+            if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text())
+                && self.document.insert_text(&text).is_ok()
+            {
+                cx.notify();
+            }
+        }
+
+        fn on_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+            let modifiers = &event.keystroke.modifiers;
+            if modifiers.control || modifiers.alt || modifiers.platform || modifiers.function {
+                return;
+            }
+
+            let Some(text) = event.keystroke.key_char.as_deref() else {
+                return;
+            };
+
+            if is_insertable_text(text) && self.document.insert_text(text).is_ok() {
+                cx.stop_propagation();
+                cx.notify();
+            }
+        }
+
+        fn focus_editor(&mut self, _: &MouseDownEvent, window: &mut Window, _: &mut Context<Self>) {
+            self.focus_handle.focus(window);
+        }
+    }
+
+    impl Focusable for MocodeGpuiDemo {
+        fn focus_handle(&self, _: &App) -> FocusHandle {
+            self.focus_handle.clone()
+        }
     }
 
     impl Render for MocodeGpuiDemo {
@@ -130,7 +246,7 @@ mod gpui_app {
                                 .flex()
                                 .flex_row()
                                 .h_full()
-                                .child(editor_surface(&self.document, cx))
+                                .child(editor_surface(&self.document, &self.focus_handle, cx))
                                 .child(inspector(&self.document)),
                         ),
                 )
@@ -170,27 +286,47 @@ mod gpui_app {
 
     fn editor_surface(
         document: &DemoDocument,
+        focus_handle: &FocusHandle,
         cx: &mut Context<'_, MocodeGpuiDemo>,
     ) -> impl IntoElement {
         let line_count = document.lines.len();
-        div().w(px(820.0)).h_full().bg(rgb(0xffffff)).child(
-            uniform_list(
-                "mocode-lines",
-                line_count,
-                cx.processor(|this, range, _window, _cx| {
-                    let mut rows = Vec::new();
-                    for index in range {
-                        let line = &this.document.lines[index];
-                        rows.push(line_row(index, line.number, line.text.clone()));
-                    }
-                    rows
-                }),
+        div()
+            .w(px(820.0))
+            .h_full()
+            .bg(rgb(0xffffff))
+            .track_focus(focus_handle)
+            .key_context("MocodeEditor")
+            .on_action(cx.listener(MocodeGpuiDemo::backspace))
+            .on_action(cx.listener(MocodeGpuiDemo::delete))
+            .on_action(cx.listener(MocodeGpuiDemo::left))
+            .on_action(cx.listener(MocodeGpuiDemo::right))
+            .on_action(cx.listener(MocodeGpuiDemo::paste))
+            .on_key_down(cx.listener(MocodeGpuiDemo::on_key_down))
+            .on_mouse_down(MouseButton::Left, cx.listener(MocodeGpuiDemo::focus_editor))
+            .child(
+                uniform_list(
+                    "mocode-lines",
+                    line_count,
+                    cx.processor(|this, range, _window, _cx| {
+                        let mut rows = Vec::new();
+                        for index in range {
+                            let line = &this.document.lines[index];
+                            let cursor = (this.document.cursor.line as usize == index)
+                                .then_some(this.document.cursor.character);
+                            rows.push(line_row(index, line.number, line.text.clone(), cursor));
+                        }
+                        rows
+                    }),
+                )
+                .h_full(),
             )
-            .h_full(),
-        )
     }
 
-    fn line_row(index: usize, number: u32, text: String) -> impl IntoElement {
+    fn line_row(index: usize, number: u32, text: String, cursor: Option<u32>) -> impl IntoElement {
+        let (before_cursor, after_cursor) = cursor
+            .map(|character| split_at_character(&text, character))
+            .unwrap_or_else(|| (text, String::new()));
+
         div()
             .id(index)
             .flex()
@@ -211,11 +347,18 @@ mod gpui_app {
                 div()
                     .w(px(756.0))
                     .px_3()
+                    .flex()
+                    .flex_row()
+                    .items_center()
                     .text_color(rgb(0x0f172a))
                     .whitespace_nowrap()
                     .overflow_hidden()
                     .text_ellipsis()
-                    .child(text),
+                    .child(before_cursor)
+                    .when(cursor.is_some(), |this| {
+                        this.child(div().w(px(1.0)).h(px(16.0)).bg(rgb(0x2563eb)))
+                    })
+                    .child(after_cursor),
             )
     }
 
@@ -229,6 +372,14 @@ mod gpui_app {
             .border_l_1()
             .border_color(rgb(0xd9e2ec))
             .child(section("YAML path", document.current_yaml_path.clone()))
+            .child(section(
+                "Cursor",
+                format!(
+                    "{}:{}",
+                    document.cursor.line + 1,
+                    document.cursor.character + 1
+                ),
+            ))
             .child(section(
                 "Completions",
                 if document.completion_labels.is_empty() {
@@ -299,6 +450,22 @@ mod gpui_app {
             _ => rgb(0x2563eb).into(),
         }
     }
+
+    fn split_at_character(text: &str, character: u32) -> (String, String) {
+        let split_at = text
+            .char_indices()
+            .nth(character as usize)
+            .map(|(index, _)| index)
+            .unwrap_or(text.len());
+        (text[..split_at].to_string(), text[split_at..].to_string())
+    }
+
+    fn is_insertable_text(text: &str) -> bool {
+        !text.is_empty()
+            && text
+                .chars()
+                .all(|ch| ch == '\n' || ch == '\t' || !ch.is_control())
+    }
 }
 
 fn main() {
@@ -333,5 +500,44 @@ mod tests {
             diagnostic.code == "mihomo.reference.missing"
                 && diagnostic.message.contains("missing-dialer")
         }));
+    }
+
+    #[test]
+    fn edits_document_through_shared_core() {
+        let mut document = DemoDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enhanced-mode: \n",
+            TextPosition::new(1, 17),
+        );
+
+        document.insert_text("fake-ip").unwrap();
+
+        assert_eq!(document.cursor, TextPosition::new(1, 24));
+        assert_eq!(document.lines[1].text, "  enhanced-mode: fake-ip");
+        assert_eq!(document.current_yaml_path, "dns.enhanced-mode");
+        assert!(document.completion_labels.contains(&"fake-ip".to_string()));
+    }
+
+    #[test]
+    fn backspaces_deletes_and_moves_cursor_in_demo_state() {
+        let mut document = DemoDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enable: true\n",
+            TextPosition::new(1, 2),
+        );
+
+        document.backspace().unwrap();
+        assert_eq!(document.cursor, TextPosition::new(1, 1));
+        assert_eq!(document.lines[1].text, " enable: true");
+
+        document.move_left().unwrap();
+        assert_eq!(document.cursor, TextPosition::new(1, 0));
+
+        document.move_right().unwrap();
+        assert_eq!(document.cursor, TextPosition::new(1, 1));
+
+        document.delete().unwrap();
+        assert_eq!(document.cursor, TextPosition::new(1, 1));
+        assert_eq!(document.lines[1].text, " nable: true");
     }
 }
