@@ -1,3 +1,4 @@
+use floem::prelude::{SignalUpdate, SignalWith};
 use mocode_api::{CompletionKind, DiagnosticSeverity, EditorError, MocodeEditor, TextPosition};
 
 const SAMPLE_TITLE: &str = "examples/configs/dialer-proxy.yaml";
@@ -10,6 +11,12 @@ struct DemoLine {
     text: String,
     diagnostic_count: usize,
     diagnostic_severity: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DemoVisibleLine {
+    line: DemoLine,
+    cursor: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +48,8 @@ struct DemoDocument {
     hover_title: String,
     hover_body: String,
 }
+
+type DocumentSignal = floem::reactive::RwSignal<DemoDocument>;
 
 impl DemoDocument {
     fn from_text(title: impl Into<String>, text: &str, inspect_position: TextPosition) -> Self {
@@ -178,15 +187,12 @@ fn main() {
 fn app_view(document: DemoDocument) -> impl floem::IntoView {
     use floem::prelude::*;
 
-    let title = document.title.clone();
-    let line_count = document.line_count;
-    let completions = document.completion_items.clone();
-    let lines = document.lines.clone();
+    let document = create_rw_signal(document);
 
     v_stack((
-        header(title, line_count),
-        completion_strip(completions),
-        h_stack((editor_surface(lines), inspector(document))).style(|style| {
+        header(document),
+        completion_strip(document),
+        h_stack((editor_surface(document), inspector(document))).style(|style| {
             style
                 .flex()
                 .flex_row()
@@ -204,17 +210,20 @@ fn app_view(document: DemoDocument) -> impl floem::IntoView {
     })
 }
 
-fn header(title: String, line_count: usize) -> impl floem::IntoView {
+fn header(document: DocumentSignal) -> impl floem::IntoView {
     use floem::prelude::*;
 
     h_stack((
         v_stack((
             text_label("mocode Floem prototype"),
-            text_label(title).style(|style| style.font_size(12.0).color(color(0x5f, 0x6b, 0x7a))),
+            dynamic_text_label(move || document.with(|document| document.title.clone()))
+                .style(|style| style.font_size(12.0).color(color(0x5f, 0x6b, 0x7a))),
         ))
         .style(|style| style.flex_col().gap(4.0)),
-        text_label(format!("{line_count} lines"))
-            .style(|style| style.color(color(0x5f, 0x6b, 0x7a))),
+        dynamic_text_label(move || {
+            document.with(|document| format!("{} lines", document.line_count))
+        })
+        .style(|style| style.color(color(0x5f, 0x6b, 0x7a))),
     ))
     .style(|style| {
         style
@@ -230,7 +239,7 @@ fn header(title: String, line_count: usize) -> impl floem::IntoView {
     })
 }
 
-fn completion_strip(items: Vec<DemoCompletion>) -> impl floem::IntoView {
+fn completion_strip(document: DocumentSignal) -> impl floem::IntoView {
     use floem::prelude::*;
 
     h_stack((
@@ -240,12 +249,19 @@ fn completion_strip(items: Vec<DemoCompletion>) -> impl floem::IntoView {
                 .font_size(11.0)
                 .color(color(0x64, 0x74, 0x8b))
         }),
-        h_stack_from_iter(
-            items
-                .into_iter()
-                .take(6)
-                .map(completion_item)
-                .collect::<Vec<_>>(),
+        dyn_stack(
+            move || {
+                document.with(|document| {
+                    document
+                        .completion_items
+                        .iter()
+                        .take(6)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+            },
+            |item| (item.kind.clone(), item.label.clone()),
+            completion_item,
         )
         .style(|style| style.gap(8.0)),
     ))
@@ -263,23 +279,56 @@ fn completion_strip(items: Vec<DemoCompletion>) -> impl floem::IntoView {
     })
 }
 
-fn editor_surface(lines: Vec<DemoLine>) -> impl floem::IntoView {
+fn editor_surface(document: DocumentSignal) -> impl floem::IntoView {
     use floem::prelude::*;
-    use floem::views::{VirtualDirection, VirtualItemSize, scroll, virtual_stack};
+    use floem::{
+        event::{EventListener, EventPropagation},
+        views::{VirtualDirection, VirtualItemSize, scroll, virtual_stack},
+    };
 
-    let lines: im::Vector<DemoLine> = lines.into_iter().collect();
-    let lines = create_rw_signal(lines);
+    let focus_request = create_rw_signal(0_u64);
+    let focus_for_click = focus_request;
 
     scroll(
         virtual_stack(
             VirtualDirection::Vertical,
             VirtualItemSize::Fixed(Box::new(|| 22.0)),
-            move || lines.get(),
-            |line| line.number,
+            move || visible_lines(document),
+            |visible_line| {
+                (
+                    visible_line.line.number,
+                    visible_line.line.text.clone(),
+                    visible_line.line.diagnostic_count,
+                    visible_line.line.diagnostic_severity.clone(),
+                    visible_line.cursor,
+                )
+            },
             line_row,
         )
         .style(|style| style.flex_col().width_full()),
     )
+    .keyboard_navigable()
+    .request_focus(move || {
+        focus_request.get();
+    })
+    .on_event(EventListener::PointerDown, move |_| {
+        focus_for_click.update(|value| *value += 1);
+        EventPropagation::Stop
+    })
+    .on_event(EventListener::KeyDown, move |event| {
+        if handle_key_down(document, event) {
+            EventPropagation::Stop
+        } else {
+            EventPropagation::Continue
+        }
+    })
+    .on_event(EventListener::ImeCommit, move |event| {
+        if handle_ime_commit(document, event) {
+            EventPropagation::Stop
+        } else {
+            EventPropagation::Continue
+        }
+    })
     .style(|style| {
         style
             .width(820.0)
@@ -288,9 +337,10 @@ fn editor_surface(lines: Vec<DemoLine>) -> impl floem::IntoView {
     })
 }
 
-fn line_row(line: DemoLine) -> impl floem::IntoView {
+fn line_row(visible_line: DemoVisibleLine) -> impl floem::IntoView {
     use floem::prelude::*;
 
+    let line = visible_line.line;
     let marker_color = line
         .diagnostic_severity
         .as_deref()
@@ -301,6 +351,10 @@ fn line_row(line: DemoLine) -> impl floem::IntoView {
     } else {
         format!("{:>3}!", line.number)
     };
+    let (before_cursor, after_cursor) = visible_line
+        .cursor
+        .map(|character| split_at_character(&line.text, character))
+        .unwrap_or_else(|| (line.text, String::new()));
 
     h_stack((
         h_stack((
@@ -317,12 +371,18 @@ fn line_row(line: DemoLine) -> impl floem::IntoView {
                 .background(color(0xf8, 0xfa, 0xfc))
                 .color(color(0x94, 0xa3, 0xb8))
         }),
-        text_label(line.text).style(|style| {
+        h_stack((
+            text_label(before_cursor),
+            cursor_bar(visible_line.cursor.is_some()),
+            text_label(after_cursor),
+        ))
+        .style(|style| {
             style
                 .width(756.0)
                 .padding_horiz(12.0)
+                .flex_row()
+                .items_center()
                 .color(color(0x0f, 0x17, 0x2a))
-                .text_ellipsis()
         }),
     ))
     .style(|style| {
@@ -337,36 +397,46 @@ fn line_row(line: DemoLine) -> impl floem::IntoView {
     })
 }
 
-fn inspector(document: DemoDocument) -> impl floem::IntoView {
+fn inspector(document: DocumentSignal) -> impl floem::IntoView {
     use floem::prelude::*;
-    use floem::views::{scroll, v_stack_from_iter};
-
-    let hover = if document.hover_body.is_empty() {
-        document.hover_title.clone()
-    } else {
-        format!("{}\n{}", document.hover_title, document.hover_body)
-    };
+    use floem::views::scroll;
 
     v_stack((
-        info_section("YAML path", document.current_yaml_path.clone()),
-        info_section(
-            "Cursor",
-            format!(
-                "{}:{}",
-                document.cursor.line + 1,
-                document.cursor.character + 1
-            ),
-        ),
-        info_section("Hover", hover),
+        info_section("YAML path", move || {
+            document.with(|document| document.current_yaml_path.clone())
+        }),
+        info_section("Cursor", move || {
+            document.with(|document| {
+                format!(
+                    "{}:{}",
+                    document.cursor.line + 1,
+                    document.cursor.character + 1
+                )
+            })
+        }),
+        info_section("Hover", move || {
+            document.with(|document| {
+                if document.hover_body.is_empty() {
+                    document.hover_title.clone()
+                } else {
+                    format!("{}\n{}", document.hover_title, document.hover_body)
+                }
+            })
+        }),
         label_text("Diagnostics"),
         scroll(
-            v_stack_from_iter(
-                document
-                    .diagnostics
-                    .clone()
-                    .into_iter()
-                    .map(diagnostic_row)
-                    .collect::<Vec<_>>(),
+            dyn_stack(
+                move || document.with(|document| document.diagnostics.clone()),
+                |diagnostic| {
+                    (
+                        diagnostic.severity.clone(),
+                        diagnostic.code.clone(),
+                        diagnostic.line,
+                        diagnostic.column,
+                        diagnostic.message.clone(),
+                    )
+                },
+                diagnostic_row,
             )
             .style(|style| style.flex_col().gap(8.0)),
         )
@@ -384,12 +454,16 @@ fn inspector(document: DemoDocument) -> impl floem::IntoView {
     })
 }
 
-fn info_section(title: &'static str, value: String) -> impl floem::IntoView {
+fn info_section(
+    value_title: &'static str,
+    value: impl Fn() -> String + 'static,
+) -> impl floem::IntoView {
     use floem::prelude::*;
 
     v_stack((
-        label_text(title),
-        text_label(value).style(|style| style.color(color(0x1f, 0x29, 0x37)).line_height(1.35)),
+        label_text(value_title),
+        dynamic_text_label(value)
+            .style(|style| style.color(color(0x1f, 0x29, 0x37)).line_height(1.35)),
     ))
     .style(|style| style.flex_col().gap(4.0).margin_bottom(16.0))
 }
@@ -459,11 +533,142 @@ fn label_text(content: &'static str) -> impl floem::IntoView {
     text_label(content).style(|style| style.font_size(11.0).color(color(0x64, 0x74, 0x8b)))
 }
 
+fn dynamic_text_label(content: impl Fn() -> String + 'static) -> impl floem::IntoView {
+    use floem::prelude::*;
+
+    label(content)
+}
+
 fn text_label(content: impl Into<String>) -> impl floem::IntoView {
     use floem::prelude::*;
 
     let content: String = content.into();
     label(move || content.clone())
+}
+
+fn cursor_bar(visible: bool) -> impl floem::IntoView {
+    use floem::prelude::*;
+
+    floem::views::empty().style(move |style| {
+        style
+            .width(if visible { 1.0 } else { 0.0 })
+            .height(16.0)
+            .background(color(0x25, 0x63, 0xeb))
+    })
+}
+
+fn visible_lines(document: DocumentSignal) -> im::Vector<DemoVisibleLine> {
+    document.with(|document| {
+        let cursor_line = document.cursor.line as usize;
+        document
+            .lines
+            .iter()
+            .enumerate()
+            .map(|(index, line)| DemoVisibleLine {
+                line: line.clone(),
+                cursor: (index == cursor_line).then_some(document.cursor.character),
+            })
+            .collect()
+    })
+}
+
+fn update_document(
+    document: DocumentSignal,
+    action: impl FnOnce(&mut DemoDocument) -> Result<(), EditorError>,
+) {
+    document.update(|document| {
+        let _ = action(document);
+    });
+}
+
+fn handle_key_down(document: DocumentSignal, event: &floem::event::Event) -> bool {
+    use floem::{
+        event::Event,
+        keyboard::{Key, NamedKey},
+    };
+
+    let Event::KeyDown(event) = event else {
+        return false;
+    };
+
+    let modifiers = event.modifiers;
+    match &event.key.logical_key {
+        Key::Named(NamedKey::Backspace) => {
+            update_document(document, DemoDocument::backspace);
+            true
+        }
+        Key::Named(NamedKey::Delete) => {
+            update_document(document, DemoDocument::delete);
+            true
+        }
+        Key::Named(NamedKey::ArrowLeft) => {
+            update_document(document, DemoDocument::move_left);
+            true
+        }
+        Key::Named(NamedKey::ArrowRight) => {
+            update_document(document, DemoDocument::move_right);
+            true
+        }
+        Key::Named(NamedKey::Enter) if !has_command_modifier(modifiers) => {
+            update_document(document, |document| document.insert_text("\n"));
+            true
+        }
+        Key::Named(NamedKey::Tab) if !has_command_modifier(modifiers) => {
+            update_document(document, |document| document.insert_text("\t"));
+            true
+        }
+        Key::Character(character) if is_paste_shortcut(character, modifiers) => {
+            if let Ok(text) = floem::Clipboard::get_contents() {
+                update_document(document, |document| document.insert_text(&text));
+            }
+            true
+        }
+        Key::Character(character)
+            if !has_command_modifier(modifiers) && is_insertable_text(&character.to_string()) =>
+        {
+            let text = character.to_string();
+            update_document(document, |document| document.insert_text(&text));
+            true
+        }
+        _ => false,
+    }
+}
+
+fn handle_ime_commit(document: DocumentSignal, event: &floem::event::Event) -> bool {
+    let floem::event::Event::ImeCommit(text) = event else {
+        return false;
+    };
+
+    if !is_insertable_text(text) {
+        return false;
+    }
+
+    update_document(document, |document| document.insert_text(text));
+    true
+}
+
+fn has_command_modifier(modifiers: floem::keyboard::Modifiers) -> bool {
+    modifiers.control() || modifiers.meta() || modifiers.alt()
+}
+
+fn is_paste_shortcut(character: &str, modifiers: floem::keyboard::Modifiers) -> bool {
+    (modifiers.control() || modifiers.meta()) && character.eq_ignore_ascii_case("v")
+}
+
+fn is_insertable_text(text: &str) -> bool {
+    !text.is_empty()
+        && text
+            .chars()
+            .all(|character| character == '\n' || character == '\t' || !character.is_control())
+}
+
+fn split_at_character(text: &str, character: u32) -> (String, String) {
+    let split_at = text
+        .char_indices()
+        .nth(character as usize)
+        .map(|(index, _)| index)
+        .unwrap_or(text.len());
+    (text[..split_at].to_string(), text[split_at..].to_string())
 }
 
 fn severity_color(severity: &str) -> floem::prelude::Color {
