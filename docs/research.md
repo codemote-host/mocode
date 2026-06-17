@@ -101,6 +101,8 @@ Decision: maintain a custom Rust schema catalog first. Generate JSON Schema late
 
 GPUI is Zed's GPU-accelerated Rust UI framework. It is promising for a high-performance editor-like component because it powers a production code editor and has examples for input, key dispatch, uniform lists, windows, and text wrapping. Risks are API maturity, documentation depth, and possible dependence on Zed ecosystem patterns.
 
+Current upstream GPUI README documents Windows support through Win32 windowing and DirectWrite text, with no Windows-specific feature flag required. The prototype should therefore compile the real GPUI adapter on Windows instead of treating Windows as a fallback-only target.
+
 ### Floem
 
 Floem is a Rust GUI library with fine-grained reactivity and ergonomic declarative views. It comes from the Lapce ecosystem and has optional editor-core related dependencies. It is promising for a reactive prototype and may integrate naturally with text editor concepts. Risks are API stability, documentation coverage, IME maturity, and long-term maintenance pace.
@@ -140,6 +142,6 @@ egui/eframe is a practical fallback and a good baseline for quick diagnostics UI
 - serde_yml status: https://doc.serdeyml.com/serde_yml/
 - Rowan: https://docs.rs/rowan/
 - GPUI: https://www.gpui.rs/
+- GPUI upstream README: https://github.com/zed-industries/zed/blob/main/crates/gpui/README.md
 - Floem: https://docs.rs/floem/latest/floem/
 - eframe: https://docs.rs/eframe/latest/eframe/
-

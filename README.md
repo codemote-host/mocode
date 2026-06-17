@@ -24,7 +24,7 @@ mocode/
 
 ## Quick Start
 
-The current phase is research and skeleton only.
+The current implementation includes the first UI-independent editor core and an initial GPUI adapter shell.
 
 ```powershell
 cargo test --workspace
@@ -32,7 +32,9 @@ cargo run -p mocode-gpui-demo
 cargo run -p mocode-floem-demo
 ```
 
-The demo crates are placeholders in phase 0. They intentionally do not pull GPUI or Floem yet, so the core boundary can be reviewed before UI work starts.
+`mocode-gpui-demo` uses the shared `mocode-api` facade and keeps Mihomo semantics out of the UI layer. Current upstream GPUI README documents Windows support through Win32 windowing and DirectWrite text, so the demo builds the same GPUI adapter on Windows, macOS, and Linux.
+
+`mocode-floem-demo` is still a placeholder until the Floem prototype phase.
 
 ## Development Roadmap
 
@@ -44,4 +46,3 @@ The demo crates are placeholders in phase 0. They intentionally do not pull GPUI
 6. Phase 5: choose UI framework and continue componentization.
 
 See [docs/roadmap.md](docs/roadmap.md).
-

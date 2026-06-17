@@ -8,5 +8,5 @@ authors.workspace = true
 description = "GPUI prototype adapter for mocode"
 
 [dependencies]
+gpui = "0.2.2"
 mocode-api = { path = "../mocode-api" }
-
