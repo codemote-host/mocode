@@ -12,4 +12,5 @@ mocode-mihomo-lint = { path = "../mocode-mihomo-lint" }
 mocode-mihomo-schema = { path = "../mocode-mihomo-schema" }
 mocode-text = { path = "../mocode-text" }
 mocode-yaml = { path = "../mocode-yaml" }
+yaml-rust2 = "0.11"
 

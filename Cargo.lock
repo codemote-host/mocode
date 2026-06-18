@@ -4032,6 +4032,7 @@ dependencies = [
  "mocode-mihomo-schema",
  "mocode-text",
  "mocode-yaml",
+ "yaml-rust2",
 ]
 
 [[package]]

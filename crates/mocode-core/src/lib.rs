@@ -1,8 +1,9 @@
 use mocode_mihomo_lint::{DiagnosticSeverity, SemanticIndex, validate_index};
 use mocode_mihomo_schema::{BUILTIN_OUTBOUNDS, CompletionKind, SchemaCatalog};
 use mocode_text::{TextBuffer, TextEdit, TextEditError, TextPosition, TextRange};
-use mocode_yaml::{YamlDocument, YamlPath};
+use mocode_yaml::{YamlDocument, YamlPath, YamlPathSegment};
 use std::collections::{BTreeMap, BTreeSet};
+use yaml_rust2::YamlLoader;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditorError {
@@ -78,10 +79,19 @@ pub struct Reference {
     pub range: TextRange,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxyChainStatus {
+    Complete,
+    MissingReference,
+    Cycle,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyChainPreview {
     pub steps: Vec<String>,
     pub is_definite: bool,
+    pub status: ProxyChainStatus,
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -211,8 +221,20 @@ impl MocodeEditor {
         &self.semantic_index
     }
 
-    pub fn proxy_chain_preview_at(&self, _position: TextPosition) -> Option<ProxyChainPreview> {
-        None
+    pub fn proxy_chain_preview_at(&self, position: TextPosition) -> Option<ProxyChainPreview> {
+        let path = self.current_yaml_path(position)?;
+        let proxy_index = proxy_index_from_dialer_proxy_path(&path)?;
+
+        // Bug 1: reject if cursor is not on the value portion of "dialer-proxy: <value>"
+        let line = self.line_text(position.line as usize)?;
+        if !cursor_on_dialer_proxy_value(&line, position.character) {
+            return None;
+        }
+
+        // Bug 2: resolve proxy name from raw YAML (accounts for unnamed proxies
+        // that the semantic index skips, causing index misalignment)
+        let entry = proxy_name_at_index(&self.text.as_string(), proxy_index)?;
+        self.proxy_chain_preview_for_entry(&entry)
     }
 
     pub fn references_at(&self, _position: TextPosition) -> Vec<Reference> {
@@ -333,6 +355,80 @@ impl MocodeEditor {
             .collect()
     }
 
+    fn proxy_chain_preview_for_entry(&self, entry: &str) -> Option<ProxyChainPreview> {
+        let dialer_targets: BTreeMap<_, _> = self
+            .semantic_index
+            .dialer_proxy_edges
+            .iter()
+            .map(|edge| (edge.from.as_str(), edge.to.as_str()))
+            .collect();
+
+        if !dialer_targets.contains_key(entry) {
+            return None;
+        }
+
+        let known_outbounds: BTreeSet<_> =
+            self.outbound_names_with_builtins().into_iter().collect();
+        let proxy_names: BTreeSet<_> = self
+            .semantic_index
+            .proxies
+            .iter()
+            .map(|proxy| proxy.name.as_str())
+            .collect();
+
+        let mut steps = vec!["Local".to_string(), entry.to_string()];
+        let mut visited = BTreeSet::new();
+        let mut current = entry;
+
+        loop {
+            if !visited.insert(current) {
+                return Some(ProxyChainPreview {
+                    steps,
+                    is_definite: false,
+                    status: ProxyChainStatus::Cycle,
+                    message: Some(format!(
+                        "dialer-proxy chain contains a cycle at `{current}`"
+                    )),
+                });
+            }
+
+            let Some(next) = dialer_targets.get(current).copied() else {
+                steps.push("Target".to_string());
+                return Some(ProxyChainPreview {
+                    steps,
+                    is_definite: true,
+                    status: ProxyChainStatus::Complete,
+                    message: None,
+                });
+            };
+
+            steps.push(next.to_string());
+
+            if !known_outbounds.contains(next) {
+                return Some(ProxyChainPreview {
+                    steps,
+                    is_definite: false,
+                    status: ProxyChainStatus::MissingReference,
+                    message: Some(format!(
+                        "dialer-proxy `{next}` referenced by `{current}` does not exist"
+                    )),
+                });
+            }
+
+            if !proxy_names.contains(next) {
+                steps.push("Target".to_string());
+                return Some(ProxyChainPreview {
+                    steps,
+                    is_definite: true,
+                    status: ProxyChainStatus::Complete,
+                    message: None,
+                });
+            }
+
+            current = next;
+        }
+    }
+
     fn refresh_indexes(&mut self) {
         let text = self.text.as_string();
         self.yaml = YamlDocument::parse(&text);
@@ -346,6 +442,17 @@ fn is_proxy_group_member_path(path: &str) -> bool {
 
 fn is_dialer_proxy_path(path: &str) -> bool {
     path.starts_with("proxies[") && path.ends_with(".dialer-proxy")
+}
+
+fn proxy_index_from_dialer_proxy_path(path: &YamlPath) -> Option<usize> {
+    match path.segments.as_slice() {
+        [
+            YamlPathSegment::Key(root),
+            YamlPathSegment::Index(index),
+            YamlPathSegment::Key(field),
+        ] if root == "proxies" && field == "dialer-proxy" => Some(*index),
+        _ => None,
+    }
 }
 
 fn reference_completion(name: &str) -> mocode_mihomo_schema::SchemaCompletion {
@@ -365,6 +472,32 @@ fn first_markdown_paragraph(markdown: &str) -> String {
             (!trimmed.is_empty()).then(|| trimmed.replace('\n', " "))
         })
         .unwrap_or_default()
+}
+
+/// Returns `true` when `character` is at or after the colon of `dialer-proxy:`.
+/// This rejects cursor positions on the key name itself, leading whitespace, comments, etc.
+fn cursor_on_dialer_proxy_value(line: &str, character: u32) -> bool {
+    let indent = line.len() - line.trim_start().len();
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with("dialer-proxy:") {
+        return false;
+    }
+    // Cursor must be at or past the end of "dialer-proxy" (i.e. on the `:` or value)
+    let key_end = indent + "dialer-proxy".len();
+    (character as usize) >= key_end
+}
+
+/// Resolves the `name` of the proxy at YAML sequence index `index` by re-parsing
+/// the raw YAML text. This is resilient to unnamed proxies that `extract_proxies`
+/// (in `mocode-mihomo-lint`) skips, which would cause a simple array-index lookup
+/// in `semantic_index.proxies` to resolve the wrong proxy.
+fn proxy_name_at_index(yaml_text: &str, index: usize) -> Option<String> {
+    let docs = YamlLoader::load_from_str(yaml_text).ok()?;
+    let doc = docs.first()?;
+    let proxies = doc["proxies"].as_vec()?;
+    let proxy = proxies.get(index)?;
+    let name = proxy["name"].as_str()?;
+    Some(name.to_string())
 }
 
 #[cfg(test)]
@@ -458,6 +591,62 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.code == "mihomo.dialer_proxy.cycle")
         );
+    }
+
+    #[test]
+    fn returns_proxy_chain_preview_for_dialer_proxy() {
+        let editor = MocodeEditor::open_text(
+            "proxies:\n  - name: entry\n    type: ss\n    dialer-proxy: mid\n  - name: mid\n    type: ss\n    dialer-proxy: exit\n  - name: exit\n    type: ss\n",
+        );
+
+        let preview = editor
+            .proxy_chain_preview_at(TextPosition::new(3, 20))
+            .unwrap();
+
+        assert_eq!(
+            preview.steps,
+            vec!["Local", "entry", "mid", "exit", "Target"]
+        );
+        assert_eq!(preview.status, ProxyChainStatus::Complete);
+        assert_eq!(preview.message, None);
+        assert!(preview.is_definite);
+    }
+
+    #[test]
+    fn proxy_chain_preview_reports_missing_dialer_target() {
+        let editor = MocodeEditor::open_text(
+            "proxies:\n  - name: entry\n    type: ss\n    dialer-proxy: missing\n",
+        );
+
+        let preview = editor
+            .proxy_chain_preview_at(TextPosition::new(3, 22))
+            .unwrap();
+
+        assert_eq!(preview.steps, vec!["Local", "entry", "missing"]);
+        assert_eq!(preview.status, ProxyChainStatus::MissingReference);
+        assert_eq!(
+            preview.message.as_deref(),
+            Some("dialer-proxy `missing` referenced by `entry` does not exist")
+        );
+        assert!(!preview.is_definite);
+    }
+
+    #[test]
+    fn proxy_chain_preview_reports_dialer_cycle() {
+        let editor =
+            MocodeEditor::open_text(include_str!("../../../tests/fixtures/dialer-cycle.yaml"));
+
+        let preview = editor
+            .proxy_chain_preview_at(TextPosition::new(10, 20))
+            .unwrap();
+
+        assert_eq!(preview.steps, vec!["Local", "a", "b", "a"]);
+        assert_eq!(preview.status, ProxyChainStatus::Cycle);
+        assert_eq!(
+            preview.message.as_deref(),
+            Some("dialer-proxy chain contains a cycle at `a`")
+        );
+        assert!(!preview.is_definite);
     }
 
     #[test]
@@ -594,5 +783,117 @@ mod tests {
 
         assert!(labels.contains(&"exit".to_string()));
         assert!(labels.contains(&"relay".to_string()));
+    }
+
+    // ── proxy_chain_preview_at negative cursor tests ──
+
+    #[test]
+    fn proxy_chain_preview_returns_none_on_key_text() {
+        let editor = MocodeEditor::open_text(
+            "proxies:\n  - name: entry\n    type: ss\n    dialer-proxy: mid\n  - name: mid\n    type: ss\n",
+        );
+
+        // cursor on the 'd' of "dialer-proxy" — not a value position
+        assert_eq!(editor.proxy_chain_preview_at(TextPosition::new(3, 4)), None);
+    }
+
+    #[test]
+    fn proxy_chain_preview_returns_none_on_indentation() {
+        let editor = MocodeEditor::open_text(
+            "proxies:\n  - name: entry\n    type: ss\n    dialer-proxy: mid\n  - name: mid\n    type: ss\n",
+        );
+
+        // cursor at column 0 on the dialer-proxy line — leading whitespace
+        assert_eq!(editor.proxy_chain_preview_at(TextPosition::new(3, 0)), None);
+    }
+
+    #[test]
+    fn proxy_chain_preview_returns_none_on_blank_line() {
+        let editor = MocodeEditor::open_text(
+            "proxies:\n  - name: entry\n    type: ss\n    dialer-proxy: mid\n\n  - name: mid\n    type: ss\n",
+        );
+
+        // cursor on blank line 4 — should not return preview
+        assert_eq!(editor.proxy_chain_preview_at(TextPosition::new(4, 0)), None);
+    }
+
+    #[test]
+    fn proxy_chain_preview_returns_none_on_comment_line() {
+        let editor = MocodeEditor::open_text(
+            "proxies:\n  - name: entry\n    type: ss\n    # dialer-proxy: mid\n    dialer-proxy: mid\n  - name: mid\n    type: ss\n",
+        );
+
+        // cursor on the comment line (line 3) — should not return preview
+        assert_eq!(
+            editor.proxy_chain_preview_at(TextPosition::new(3, 16)),
+            None
+        );
+    }
+
+    #[test]
+    fn proxy_chain_preview_returns_none_on_unrelated_field() {
+        let editor = MocodeEditor::open_text(
+            "proxies:\n  - name: entry\n    type: ss\n    dialer-proxy: mid\n  - name: mid\n    type: ss\n",
+        );
+
+        // cursor on "type: ss" line — not a dialer-proxy field
+        assert_eq!(editor.proxy_chain_preview_at(TextPosition::new(2, 8)), None);
+    }
+
+    // ── built-in outbound tests ──
+
+    #[test]
+    fn proxy_chain_preview_completes_for_direct_outbound() {
+        let editor = MocodeEditor::open_text(
+            "proxies:\n  - name: entry\n    type: ss\n    dialer-proxy: DIRECT\n",
+        );
+
+        let preview = editor
+            .proxy_chain_preview_at(TextPosition::new(3, 22))
+            .unwrap();
+
+        assert_eq!(preview.steps, vec!["Local", "entry", "DIRECT", "Target"]);
+        assert_eq!(preview.status, ProxyChainStatus::Complete);
+        assert!(preview.is_definite);
+    }
+
+    #[test]
+    fn proxy_chain_preview_completes_for_reject_outbound() {
+        let editor = MocodeEditor::open_text(
+            "proxies:\n  - name: entry\n    type: ss\n    dialer-proxy: REJECT\n",
+        );
+
+        let preview = editor
+            .proxy_chain_preview_at(TextPosition::new(3, 22))
+            .unwrap();
+
+        assert_eq!(preview.steps, vec!["Local", "entry", "REJECT", "Target"]);
+        assert_eq!(preview.status, ProxyChainStatus::Complete);
+        assert!(preview.is_definite);
+    }
+
+    // ── incomplete editing test: unnamed proxy before named proxy ──
+
+    #[test]
+    fn proxy_chain_preview_targets_correct_proxy_with_unnamed_preceding_item() {
+        // YAML sequence: index 0 has no name → skipped by lint
+        //               index 1 is "alpha" → proxies[0] in semantic_index
+        //               index 2 is "beta"  → proxies[1] in semantic_index
+        //               index 3 is "mid"   → proxies[2] in semantic_index
+        let editor = MocodeEditor::open_text(
+            "proxies:\n  - type: ss\n    dialer-proxy: x\n  - name: alpha\n    type: ss\n    dialer-proxy: mid\n  - name: beta\n    type: ss\n    dialer-proxy: exit\n  - name: mid\n    type: ss\n",
+        );
+
+        // Cursor on "dialer-proxy: mid" under alpha (line 5).
+        // YAML path = proxies[1].dialer-proxy
+        // Current bug: uses semantic_index.proxies[1] = "beta" (wrong!)
+        // Correct: must resolve to "alpha"
+        let preview = editor
+            .proxy_chain_preview_at(TextPosition::new(5, 22))
+            .unwrap();
+
+        assert_eq!(preview.steps, vec!["Local", "alpha", "mid", "Target"]);
+        assert_eq!(preview.status, ProxyChainStatus::Complete);
+        assert!(preview.is_definite);
     }
 }
