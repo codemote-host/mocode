@@ -8,10 +8,17 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
     use mocode_api::TextPosition;
 
     use crate::{
-        component::GpuiEditorDocument,
+        app,
+        component::{GpuiEditorDocument, GpuiEditorSaveError},
         fixtures::{SAMPLE_TITLE, default_fixture, document_by_fixture_id, document_from_fixture},
     };
 
@@ -21,6 +28,106 @@ mod tests {
 
     fn load_fixture_by_id(id: &str) -> Option<GpuiEditorDocument> {
         document_by_fixture_id(id)
+    }
+
+    fn unique_temp_yaml_path(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "mocode-gpui-demo-{label}-{}-{nanos}.yaml",
+            std::process::id()
+        ))
+    }
+
+    fn write_temp_yaml(label: &str, text: &str) -> PathBuf {
+        let path = unique_temp_yaml_path(label);
+        fs::write(&path, text).expect("test yaml should be writable");
+        path
+    }
+
+    fn file_name(path: &Path) -> String {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .expect("test path should have utf-8 file name")
+            .to_string()
+    }
+
+    #[test]
+    fn opens_document_from_startup_path() {
+        let path = write_temp_yaml("startup-open", "mixed-port: 7890\n");
+
+        let document = app::initial_document_from_startup_path(Some(path.as_path()));
+
+        assert_eq!(document.title, file_name(&path));
+        assert_eq!(document.path.as_deref(), Some(path.as_path()));
+        assert_eq!(document.path_display, path.display().to_string());
+        assert_eq!(document.text(), "mixed-port: 7890\n");
+        assert!(!document.dirty);
+        assert!(document.save_status.contains("Opened"));
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn falls_back_to_default_fixture_when_startup_path_missing() {
+        let missing_path = unique_temp_yaml_path("missing-startup");
+
+        let document = app::initial_document_from_startup_path(Some(missing_path.as_path()));
+
+        assert_eq!(document.title, SAMPLE_TITLE);
+        assert!(document.path.is_none());
+        assert!(!document.dirty);
+        assert!(document.save_status.contains("Failed to open"));
+        assert!(
+            document
+                .save_status
+                .contains(&missing_path.display().to_string())
+        );
+    }
+
+    #[test]
+    fn editing_marks_opened_document_dirty() {
+        let path = write_temp_yaml("dirty", "mixed-port: 7890\n");
+        let mut document = app::initial_document_from_startup_path(Some(path.as_path()));
+
+        document.insert_text("# edited\n").unwrap();
+
+        assert!(document.dirty);
+        assert!(document.save_status.contains("Modified"));
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn saves_opened_document_to_disk() {
+        let path = write_temp_yaml("save", "mixed-port: 7890\n");
+        let mut document = app::initial_document_from_startup_path(Some(path.as_path()));
+
+        document.insert_text("# saved\n").unwrap();
+        document.save_to_original_path().unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "# saved\nmixed-port: 7890\n"
+        );
+        assert!(!document.dirty);
+        assert!(document.save_status.contains("Saved"));
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn saving_fixture_without_path_reports_unsaved_state() {
+        let mut document = load_demo_document();
+
+        let result = document.save_to_original_path();
+
+        assert!(matches!(result, Err(GpuiEditorSaveError::MissingPath)));
+        assert!(document.path.is_none());
+        assert!(!document.dirty);
+        assert!(document.save_status.contains("not saveable"));
     }
 
     #[test]

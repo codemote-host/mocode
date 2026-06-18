@@ -1,5 +1,9 @@
+use std::path::{Path, PathBuf};
+
 use crate::{
-    component::{self, GpuiEditorComponent, GpuiEditorHost, render_editor_component},
+    component::{
+        self, GpuiEditorComponent, GpuiEditorDocument, GpuiEditorHost, render_editor_component,
+    },
     fixtures::{DemoFixture, all_fixtures, default_document, document_by_fixture_id},
 };
 use gpui::{
@@ -8,25 +12,49 @@ use gpui::{
 };
 
 pub(crate) fn run() {
-    Application::new().run(|cx: &mut App| {
+    let startup_path = std::env::args_os().nth(1).map(PathBuf::from);
+    run_with_startup_path(startup_path);
+}
+
+fn run_with_startup_path(startup_path: Option<PathBuf>) {
+    Application::new().run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1120.0), px(720.0)), cx);
         component::bind_editor_keys(cx);
+        let startup_path = startup_path.clone();
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |window, cx| {
+            move |window, cx| {
                 let focus_handle = cx.focus_handle().tab_stop(true);
                 focus_handle.focus(window);
+                let document = initial_document_from_startup_path(startup_path.as_deref());
                 cx.new(|_| MocodeGpuiDemo {
-                    editor: GpuiEditorComponent::new(default_document(), focus_handle),
+                    editor: GpuiEditorComponent::new(document, focus_handle),
                 })
             },
         )
         .unwrap();
         cx.activate(true);
     });
+}
+
+pub(crate) fn initial_document_from_startup_path(path: Option<&Path>) -> GpuiEditorDocument {
+    match path {
+        Some(path) => match GpuiEditorDocument::from_path(path) {
+            Ok(document) => document,
+            Err(error) => {
+                let mut document = default_document();
+                document.save_status = format!(
+                    "Failed to open {}: {error}; showing default fixture",
+                    path.display()
+                );
+                document
+            }
+        },
+        None => default_document(),
+    }
 }
 
 struct MocodeGpuiDemo {
@@ -101,6 +129,20 @@ fn header(editor: &GpuiEditorComponent, cx: &mut Context<'_, MocodeGpuiDemo>) ->
                         .text_size(px(12.0))
                         .child(document.title.clone()),
                 ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .text_color(rgb(0x5f6b7a))
+                .text_size(px(12.0))
+                .child(document.path_display.clone())
+                .child(format!(
+                    "{} - {}",
+                    if document.dirty { "dirty" } else { "clean" },
+                    document.save_status
+                )),
         )
         .child(fixture_selector(cx))
         .child(

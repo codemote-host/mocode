@@ -1,3 +1,8 @@
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
+
 use mocode_api::{
     CompletionKind, DiagnosticSeverity, EditorError, MocodeEditor, TextPosition, TextRange,
 };
@@ -17,7 +22,8 @@ actions!(
         SelectLeft,
         SelectRight,
         Paste,
-        Copy
+        Copy,
+        Save
     ]
 );
 
@@ -52,9 +58,19 @@ pub(crate) struct GpuiEditorCompletionPopup {
     pub(crate) items: Vec<GpuiEditorCompletion>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum GpuiEditorSaveError {
+    MissingPath,
+    Io { path: PathBuf, message: String },
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct GpuiEditorDocument {
     pub(crate) title: String,
+    pub(crate) path: Option<PathBuf>,
+    pub(crate) path_display: String,
+    pub(crate) dirty: bool,
+    pub(crate) save_status: String,
     editor: MocodeEditor,
     pub(crate) cursor: TextPosition,
     pub(crate) line_count: usize,
@@ -76,9 +92,49 @@ impl GpuiEditorDocument {
         text: &str,
         inspect_position: TextPosition,
     ) -> Self {
+        Self::from_text_with_path(title, text, inspect_position, None)
+    }
+
+    pub(crate) fn from_path(path: impl AsRef<Path>) -> io::Result<Self> {
+        let path = path.as_ref();
+        let text = fs::read_to_string(path)?;
+        let title = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| path.display().to_string());
+        let mut document = Self::from_text_with_path(
+            title,
+            &text,
+            TextPosition::new(0, 0),
+            Some(path.to_path_buf()),
+        );
+        document.save_status = format!("Opened {}", document.path_display);
+        Ok(document)
+    }
+
+    pub(crate) fn from_text_with_path(
+        title: impl Into<String>,
+        text: &str,
+        inspect_position: TextPosition,
+        path: Option<PathBuf>,
+    ) -> Self {
         let editor = MocodeEditor::open_text(text);
+        let path_display = path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<built-in fixture>".to_string());
+        let save_status = if path.is_some() {
+            format!("Opened {path_display}")
+        } else {
+            "Built-in fixture is not saveable".to_string()
+        };
         let mut document = Self {
             title: title.into(),
+            path,
+            path_display,
+            dirty: false,
+            save_status,
             editor,
             cursor: inspect_position,
             line_count: 0,
@@ -100,6 +156,7 @@ impl GpuiEditorDocument {
     pub(crate) fn insert_text(&mut self, text: &str) -> Result<(), EditorError> {
         self.cursor = self.editor.insert_text_at(self.cursor, text)?;
         self.clear_selection();
+        self.mark_dirty();
         self.refresh_derived();
         Ok(())
     }
@@ -107,6 +164,7 @@ impl GpuiEditorDocument {
     pub(crate) fn backspace(&mut self) -> Result<(), EditorError> {
         self.cursor = self.editor.backspace_at(self.cursor)?;
         self.clear_selection();
+        self.mark_dirty();
         self.refresh_derived();
         Ok(())
     }
@@ -114,6 +172,7 @@ impl GpuiEditorDocument {
     pub(crate) fn delete(&mut self) -> Result<(), EditorError> {
         self.cursor = self.editor.delete_at(self.cursor)?;
         self.clear_selection();
+        self.mark_dirty();
         self.refresh_derived();
         Ok(())
     }
@@ -157,6 +216,28 @@ impl GpuiEditorDocument {
 
     pub(crate) fn text(&self) -> String {
         self.editor.text()
+    }
+
+    pub(crate) fn save_to_original_path(&mut self) -> Result<(), GpuiEditorSaveError> {
+        let Some(path) = self.path.clone() else {
+            self.save_status = "Built-in fixture is not saveable".to_string();
+            return Err(GpuiEditorSaveError::MissingPath);
+        };
+
+        if let Err(error) = fs::write(&path, self.text()) {
+            let message = error.to_string();
+            self.save_status = format!("Failed to save {}: {message}", path.display());
+            return Err(GpuiEditorSaveError::Io { path, message });
+        }
+
+        self.dirty = false;
+        self.save_status = format!("Saved {}", path.display());
+        Ok(())
+    }
+
+    fn mark_dirty(&mut self) {
+        self.dirty = true;
+        self.save_status = "Modified".to_string();
     }
 
     fn refresh_derived(&mut self) {
@@ -296,6 +377,10 @@ impl GpuiEditorComponent {
     fn copy_selection_text(&self) -> Option<String> {
         self.document.copy_selection_text()
     }
+
+    fn save_to_original_path(&mut self) -> Result<(), GpuiEditorSaveError> {
+        self.document.save_to_original_path()
+    }
 }
 
 pub(crate) trait GpuiEditorHost {
@@ -315,6 +400,8 @@ pub(crate) fn bind_editor_keys(cx: &mut App) {
         KeyBinding::new("ctrl-v", Paste, Some("MocodeEditor")),
         KeyBinding::new("cmd-c", Copy, Some("MocodeEditor")),
         KeyBinding::new("ctrl-c", Copy, Some("MocodeEditor")),
+        KeyBinding::new("cmd-s", Save, Some("MocodeEditor")),
+        KeyBinding::new("ctrl-s", Save, Some("MocodeEditor")),
     ]);
 }
 
@@ -399,6 +486,10 @@ where
             if let Some(text) = this.editor_component().copy_selection_text() {
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
             }
+        }))
+        .on_action(cx.listener(|this: &mut T, _: &Save, _: &mut Window, cx| {
+            let _ = this.editor_component_mut().save_to_original_path();
+            cx.notify();
         }))
         .on_key_down(
             cx.listener(|this: &mut T, event: &KeyDownEvent, _: &mut Window, cx| {
@@ -528,6 +619,16 @@ fn inspector(document: &GpuiEditorDocument) -> impl IntoElement {
         .bg(rgb(0xf2f5f9))
         .border_l_1()
         .border_color(rgb(0xd9e2ec))
+        .child(section("Document", document.title.clone()))
+        .child(section("Path", document.path_display.clone()))
+        .child(section(
+            "Save",
+            format!(
+                "{} - {}",
+                if document.dirty { "dirty" } else { "clean" },
+                document.save_status
+            ),
+        ))
         .child(section("YAML path", document.current_yaml_path.clone()))
         .child(section(
             "Cursor",
