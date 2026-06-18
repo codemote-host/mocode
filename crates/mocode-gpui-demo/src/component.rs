@@ -75,7 +75,6 @@ pub(crate) struct GpuiEditorDocument {
     editor: MocodeEditor,
     pub(crate) cursor: TextPosition,
     pub(crate) line_count: usize,
-    pub(crate) lines: Vec<GpuiEditorLine>,
     pub(crate) current_yaml_path: String,
     pub(crate) diagnostics: Vec<GpuiEditorDiagnostic>,
     pub(crate) completion_labels: Vec<String>,
@@ -140,7 +139,6 @@ impl GpuiEditorDocument {
             editor,
             cursor: inspect_position,
             line_count: 0,
-            lines: Vec::new(),
             current_yaml_path: String::new(),
             diagnostics: Vec::new(),
             completion_labels: Vec::new(),
@@ -221,6 +219,35 @@ impl GpuiEditorDocument {
         self.editor.text()
     }
 
+    pub(crate) fn line_at(&self, index: usize) -> Option<GpuiEditorLine> {
+        let lines = self.editor.semantic_lines_in_range(index, index + 1);
+        lines.into_iter().next().map(|line| GpuiEditorLine {
+            number: line.number,
+            text: line.text,
+            diagnostic_count: line.diagnostics.len(),
+            diagnostic_severity: line
+                .diagnostics
+                .first()
+                .map(|diagnostic| severity_label(diagnostic.severity).to_string()),
+        })
+    }
+
+    pub(crate) fn lines_in_range(&self, start: usize, end: usize) -> Vec<GpuiEditorLine> {
+        self.editor
+            .semantic_lines_in_range(start, end)
+            .into_iter()
+            .map(|line| GpuiEditorLine {
+                number: line.number,
+                text: line.text,
+                diagnostic_count: line.diagnostics.len(),
+                diagnostic_severity: line
+                    .diagnostics
+                    .first()
+                    .map(|diagnostic| severity_label(diagnostic.severity).to_string()),
+            })
+            .collect()
+    }
+
     pub(crate) fn save_to_original_path(&mut self) -> Result<(), GpuiEditorSaveError> {
         let Some(path) = self.path.clone() else {
             self.save_status = "Built-in fixture is not saveable".to_string();
@@ -244,8 +271,7 @@ impl GpuiEditorDocument {
     }
 
     fn refresh_derived(&mut self) {
-        let snapshot = self.editor.snapshot();
-        let semantic_lines = self.editor.semantic_lines();
+        self.line_count = self.editor.line_count();
         self.current_yaml_path = self
             .editor
             .current_yaml_path(self.cursor)
@@ -274,8 +300,9 @@ impl GpuiEditorDocument {
             self.hover_title = "<none>".to_string();
             self.hover_body.clear();
         }
-        self.diagnostics = snapshot
-            .diagnostics
+        self.diagnostics = self
+            .editor
+            .diagnostics()
             .into_iter()
             .map(|diagnostic| GpuiEditorDiagnostic {
                 severity: severity_label(diagnostic.severity).to_string(),
@@ -285,19 +312,6 @@ impl GpuiEditorDocument {
                 column: diagnostic.range.map(|range| range.start.character + 1),
             })
             .collect();
-        self.lines = semantic_lines
-            .into_iter()
-            .map(|line| GpuiEditorLine {
-                number: line.number,
-                text: line.text,
-                diagnostic_count: line.diagnostics.len(),
-                diagnostic_severity: line
-                    .diagnostics
-                    .first()
-                    .map(|diagnostic| severity_label(diagnostic.severity).to_string()),
-            })
-            .collect();
-        self.line_count = self.lines.len();
         self.selection_summary = self
             .selected_range()
             .map(format_selection_range)
@@ -436,7 +450,7 @@ fn editor_surface<T>(editor: &GpuiEditorComponent, cx: &mut Context<'_, T>) -> i
 where
     T: GpuiEditorHost + 'static,
 {
-    let line_count = editor.document().lines.len();
+    let line_count = editor.document().line_count;
     div()
         .w(px(820.0))
         .h_full()
@@ -525,24 +539,27 @@ where
             uniform_list(
                 "mocode-lines",
                 line_count,
-                cx.processor(|this: &mut T, range, _window, _cx| {
-                    let document = this.editor_component().document();
-                    let mut rows = Vec::new();
-                    for index in range {
-                        let line = &document.lines[index];
-                        let cursor = (document.cursor.line as usize == index)
-                            .then_some(document.cursor.character);
-                        rows.push(line_row(
-                            index,
-                            line.number,
-                            line.text.clone(),
-                            line.diagnostic_count,
-                            line.diagnostic_severity.clone(),
-                            cursor,
-                        ));
-                    }
-                    rows
-                }),
+                cx.processor(
+                    |this: &mut T, range: std::ops::Range<usize>, _window, _cx| {
+                        let document = this.editor_component().document();
+                        let slice = document.lines_in_range(range.start, range.end);
+                        let mut rows = Vec::new();
+                        for (offset, line) in slice.into_iter().enumerate() {
+                            let index = range.start + offset;
+                            let cursor = (document.cursor.line as usize == index)
+                                .then_some(document.cursor.character);
+                            rows.push(line_row(
+                                index,
+                                line.number,
+                                line.text,
+                                line.diagnostic_count,
+                                line.diagnostic_severity,
+                                cursor,
+                            ));
+                        }
+                        rows
+                    },
+                ),
             )
             .h_full(),
         )

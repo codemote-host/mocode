@@ -317,6 +317,44 @@ impl MocodeEditor {
             .collect()
     }
 
+    pub fn semantic_lines_in_range(&self, start_line: usize, end_line: usize) -> Vec<SemanticLine> {
+        let total = self.line_count();
+        if start_line >= total {
+            return Vec::new();
+        }
+        let end = end_line.min(total);
+
+        let mut diagnostics_by_line = BTreeMap::<u32, Vec<LineDiagnostic>>::new();
+        for diagnostic in self.diagnostics() {
+            let Some(range) = diagnostic.range else {
+                continue;
+            };
+
+            diagnostics_by_line
+                .entry(range.start.line)
+                .or_default()
+                .push(LineDiagnostic {
+                    severity: diagnostic.severity,
+                    code: diagnostic.code,
+                    message: diagnostic.message,
+                    column: Some(range.start.character),
+                });
+        }
+
+        (start_line..end)
+            .filter_map(|line| {
+                let number = u32::try_from(line + 1).ok()?;
+                Some(SemanticLine {
+                    number,
+                    text: self.line_text(line)?,
+                    diagnostics: diagnostics_by_line
+                        .remove(&u32::try_from(line).ok()?)
+                        .unwrap_or_default(),
+                })
+            })
+            .collect()
+    }
+
     pub fn text(&self) -> String {
         self.text.as_string()
     }
@@ -884,5 +922,54 @@ mod tests {
         assert_eq!(preview.steps, vec!["Local", "alpha", "mid", "Target"]);
         assert_eq!(preview.status, ProxyChainStatus::Complete);
         assert!(preview.is_definite);
+    }
+
+    // ── viewport slice tests ──
+
+    #[test]
+    fn semantic_lines_in_range_returns_only_requested_range() {
+        let editor = MocodeEditor::open_text(
+            "mixed-port: 7890\nmode: rule\nproxies:\n  - name: hk-1\n    type: ss\n",
+        );
+        // Lines 1-3 (0-indexed: 1,2)
+        let slice = editor.semantic_lines_in_range(1, 3);
+
+        assert_eq!(slice.len(), 2);
+        assert_eq!(slice[0].number, 2);
+        assert_eq!(slice[0].text, "mode: rule");
+        assert_eq!(slice[1].number, 3);
+        assert_eq!(slice[1].text, "proxies:");
+    }
+
+    #[test]
+    fn semantic_lines_in_range_respects_line_count_bound() {
+        let editor = MocodeEditor::open_text("a\nb\nc\n");
+        // "a\nb\nc\n" has 4 lines (trailing newline → empty last line).
+        // Request beyond EOF — should clamp to line_count (4).
+        let slice = editor.semantic_lines_in_range(1, 100);
+        assert_eq!(slice.len(), 3); // lines at index 1,2,3
+        assert_eq!(slice[0].number, 2);
+        assert_eq!(slice[2].number, 4);
+    }
+
+    #[test]
+    fn semantic_lines_in_range_empty_for_out_of_bounds() {
+        let editor = MocodeEditor::open_text("a\nb\n");
+        let slice = editor.semantic_lines_in_range(5, 10);
+        assert!(slice.is_empty());
+    }
+
+    #[test]
+    fn semantic_lines_in_range_includes_diagnostics() {
+        let editor =
+            MocodeEditor::open_text(include_str!("../../../examples/configs/invalid-yaml.yaml"));
+        // Line 2 (0-indexed) has a YAML syntax error
+        let slice = editor.semantic_lines_in_range(0, 5);
+
+        assert!(!slice.is_empty());
+        assert!(
+            slice.iter().any(|line| !line.diagnostics.is_empty()),
+            "slice should include at least one line with diagnostics"
+        );
     }
 }

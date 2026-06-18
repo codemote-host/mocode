@@ -153,8 +153,9 @@ mod tests {
 
         assert_eq!(document.title, SAMPLE_TITLE);
         assert!(document.line_count > 10);
-        assert_eq!(document.lines[0].number, 1);
-        assert_eq!(document.lines[0].text, "mixed-port: 7890");
+        let line0 = document.line_at(0).unwrap();
+        assert_eq!(line0.number, 1);
+        assert_eq!(line0.text, "mixed-port: 7890");
         assert_eq!(document.current_yaml_path, "proxies[0].dialer-proxy");
         assert!(document.completion_labels.contains(&"exit".to_string()));
     }
@@ -181,7 +182,12 @@ mod tests {
             TextPosition::new(2, 0),
         );
 
-        assert!(document.lines.iter().any(|line| line.diagnostic_count > 0));
+        assert!(
+            document
+                .lines_in_range(0, document.line_count)
+                .iter()
+                .any(|line| line.diagnostic_count > 0)
+        );
         assert!(document.diagnostics.iter().any(|diagnostic| {
             diagnostic.code == "yaml.syntax"
                 && diagnostic.line.is_some()
@@ -245,7 +251,7 @@ mod tests {
 
         assert!(text.lines().count() >= 5_000);
         assert!(document.line_count >= 5_000);
-        assert_eq!(document.lines[0].text, "mixed-port: 7890");
+        assert_eq!(document.line_at(0).unwrap().text, "mixed-port: 7890");
         assert!(
             document
                 .completion_labels
@@ -261,7 +267,7 @@ mod tests {
 
         assert!(text.lines().count() >= 20_000);
         assert!(document.line_count >= 20_000);
-        assert_eq!(document.lines[0].text, "mixed-port: 7890");
+        assert_eq!(document.line_at(0).unwrap().text, "mixed-port: 7890");
         assert!(document.diagnostics.is_empty());
     }
 
@@ -293,7 +299,10 @@ mod tests {
         document.insert_text("fake-ip").unwrap();
 
         assert_eq!(document.cursor, TextPosition::new(1, 24));
-        assert_eq!(document.lines[1].text, "  enhanced-mode: fake-ip");
+        assert_eq!(
+            document.line_at(1).unwrap().text,
+            "  enhanced-mode: fake-ip"
+        );
         assert_eq!(document.current_yaml_path, "dns.enhanced-mode");
         assert!(document.completion_labels.contains(&"fake-ip".to_string()));
     }
@@ -323,7 +332,7 @@ mod tests {
 
         document.backspace().unwrap();
         assert_eq!(document.cursor, TextPosition::new(1, 1));
-        assert_eq!(document.lines[1].text, " enable: true");
+        assert_eq!(document.line_at(1).unwrap().text, " enable: true");
 
         document.move_left().unwrap();
         assert_eq!(document.cursor, TextPosition::new(1, 0));
@@ -333,7 +342,7 @@ mod tests {
 
         document.delete().unwrap();
         assert_eq!(document.cursor, TextPosition::new(1, 1));
-        assert_eq!(document.lines[1].text, " nable: true");
+        assert_eq!(document.line_at(1).unwrap().text, " nable: true");
     }
 
     #[test]
@@ -366,7 +375,7 @@ mod tests {
         assert_eq!(document.title, SAMPLE_TITLE);
         assert_eq!(document.cursor, TextPosition::new(10, 17));
         assert!(document.line_count > 0);
-        assert_eq!(document.lines[0].number, 1);
+        assert_eq!(document.line_at(0).unwrap().number, 1);
         assert!(document.completion_labels.contains(&"exit".to_string()));
     }
 
