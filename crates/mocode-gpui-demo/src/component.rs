@@ -2,7 +2,6 @@ use mocode_api::{
     CompletionKind, DiagnosticSeverity, EditorError, MocodeEditor, TextPosition, TextRange,
 };
 
-use crate::fixtures::DemoFixture;
 use gpui::{
     App, ClipboardItem, Context, FocusHandle, IntoElement, KeyBinding, KeyDownEvent, MouseButton,
     MouseDownEvent, Window, actions, div, prelude::*, px, rgb, uniform_list,
@@ -98,10 +97,6 @@ impl GpuiEditorDocument {
         document
     }
 
-    pub(crate) fn from_fixture(fixture: &DemoFixture) -> Self {
-        Self::from_text(fixture.title, fixture.text, fixture.inspect_position)
-    }
-
     pub(crate) fn insert_text(&mut self, text: &str) -> Result<(), EditorError> {
         self.cursor = self.editor.insert_text_at(self.cursor, text)?;
         self.clear_selection();
@@ -158,6 +153,10 @@ impl GpuiEditorDocument {
 
     pub(crate) fn copy_selection_text(&self) -> Option<String> {
         self.selected_text()
+    }
+
+    pub(crate) fn text(&self) -> String {
+        self.editor.text()
     }
 
     fn refresh_derived(&mut self) {

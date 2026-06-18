@@ -1,8 +1,6 @@
 use crate::{
-    component::{
-        self, GpuiEditorComponent, GpuiEditorDocument, GpuiEditorHost, render_editor_component,
-    },
-    fixtures::{DemoFixture, all_fixtures, default_fixture, fixture_by_id},
+    component::{self, GpuiEditorComponent, GpuiEditorHost, render_editor_component},
+    fixtures::{DemoFixture, all_fixtures, default_document, document_by_fixture_id},
 };
 use gpui::{
     App, Application, Bounds, Context, FocusHandle, Focusable, IntoElement, MouseButton,
@@ -22,10 +20,7 @@ pub(crate) fn run() {
                 let focus_handle = cx.focus_handle().tab_stop(true);
                 focus_handle.focus(window);
                 cx.new(|_| MocodeGpuiDemo {
-                    editor: GpuiEditorComponent::new(
-                        GpuiEditorDocument::from_fixture(default_fixture()),
-                        focus_handle,
-                    ),
+                    editor: GpuiEditorComponent::new(default_document(), focus_handle),
                 })
             },
         )
@@ -40,9 +35,8 @@ struct MocodeGpuiDemo {
 
 impl MocodeGpuiDemo {
     fn select_fixture(&mut self, id: &'static str, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(fixture) = fixture_by_id(id) {
-            self.editor
-                .replace_document(GpuiEditorDocument::from_fixture(fixture));
+        if let Some(document) = document_by_fixture_id(id) {
+            self.editor.replace_document(document);
             self.editor.focus(window);
             cx.notify();
         }
@@ -117,22 +111,11 @@ fn header(editor: &GpuiEditorComponent, cx: &mut Context<'_, MocodeGpuiDemo>) ->
 }
 
 fn fixture_selector(cx: &mut Context<'_, MocodeGpuiDemo>) -> impl IntoElement {
-    let fixtures = all_fixtures();
-    div()
-        .flex()
-        .flex_row()
-        .gap_1()
-        .child(fixture_button(&fixtures[0], cx))
-        .child(fixture_button(&fixtures[1], cx))
-        .child(fixture_button(&fixtures[2], cx))
-        .child(fixture_button(&fixtures[3], cx))
-        .child(fixture_button(&fixtures[4], cx))
-        .child(fixture_button(&fixtures[5], cx))
-        .child(fixture_button(&fixtures[6], cx))
-        .child(fixture_button(&fixtures[7], cx))
-        .child(fixture_button(&fixtures[8], cx))
-        .child(fixture_button(&fixtures[9], cx))
-        .child(fixture_button(&fixtures[10], cx))
+    let mut selector = div().flex().flex_row().gap_1();
+    for fixture in all_fixtures().iter() {
+        selector = selector.child(fixture_button(fixture, cx));
+    }
+    selector
 }
 
 fn fixture_button(

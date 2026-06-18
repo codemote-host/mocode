@@ -1,3 +1,4 @@
+use crate::component::GpuiEditorDocument;
 use mocode_api::TextPosition;
 
 pub(crate) const SAMPLE_TITLE: &str = "examples/configs/dialer-proxy.yaml";
@@ -105,4 +106,16 @@ pub(crate) fn default_fixture() -> &'static DemoFixture {
 
 pub(crate) fn fixture_by_id(id: &str) -> Option<&'static DemoFixture> {
     DEMO_FIXTURES.iter().find(|fixture| fixture.id == id)
+}
+
+pub(crate) fn document_from_fixture(fixture: &DemoFixture) -> GpuiEditorDocument {
+    GpuiEditorDocument::from_text(fixture.title, fixture.text, fixture.inspect_position)
+}
+
+pub(crate) fn default_document() -> GpuiEditorDocument {
+    document_from_fixture(default_fixture())
+}
+
+pub(crate) fn document_by_fixture_id(id: &str) -> Option<GpuiEditorDocument> {
+    fixture_by_id(id).map(document_from_fixture)
 }

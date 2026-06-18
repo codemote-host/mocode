@@ -12,15 +12,32 @@ mod tests {
 
     use crate::{
         component::GpuiEditorDocument,
-        fixtures::{SAMPLE_TITLE, default_fixture, fixture_by_id},
+        fixtures::{SAMPLE_TITLE, default_fixture, document_by_fixture_id, document_from_fixture},
     };
 
     fn load_demo_document() -> GpuiEditorDocument {
-        GpuiEditorDocument::from_fixture(default_fixture())
+        document_from_fixture(default_fixture())
     }
 
     fn load_fixture_by_id(id: &str) -> Option<GpuiEditorDocument> {
-        fixture_by_id(id).map(GpuiEditorDocument::from_fixture)
+        document_by_fixture_id(id)
+    }
+
+    #[test]
+    fn component_source_stays_fixture_agnostic() {
+        let component_source = include_str!("component.rs");
+
+        assert!(!component_source.contains("crate::fixtures"));
+        assert!(!component_source.contains("DemoFixture"));
+        assert!(!component_source.contains("from_fixture"));
+    }
+
+    #[test]
+    fn fixture_selector_iterates_over_all_registered_fixtures() {
+        let app_source = include_str!("app.rs");
+
+        assert!(!app_source.contains("fixtures["));
+        assert!(app_source.contains("all_fixtures().iter()"));
     }
 
     #[test]
@@ -175,6 +192,21 @@ mod tests {
     }
 
     #[test]
+    fn document_text_returns_current_core_text() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enhanced-mode: \n",
+            TextPosition::new(1, 17),
+        );
+
+        assert_eq!(document.text(), "dns:\n  enhanced-mode: \n");
+
+        document.insert_text("fake-ip").unwrap();
+
+        assert_eq!(document.text(), "dns:\n  enhanced-mode: fake-ip\n");
+    }
+
+    #[test]
     fn backspaces_deletes_and_moves_cursor_in_demo_state() {
         let mut document = GpuiEditorDocument::from_text(
             "scratch.yaml",
@@ -222,8 +254,7 @@ mod tests {
 
     #[test]
     fn fixture_boundary_builds_reusable_gpui_editor_document() {
-        let fixture = fixture_by_id("dialer-proxy").expect("dialer fixture should exist");
-        let document = GpuiEditorDocument::from_fixture(fixture);
+        let document = document_by_fixture_id("dialer-proxy").expect("dialer fixture should exist");
 
         assert_eq!(document.title, SAMPLE_TITLE);
         assert_eq!(document.cursor, TextPosition::new(10, 17));
