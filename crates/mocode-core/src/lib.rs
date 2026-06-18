@@ -3,7 +3,6 @@ use mocode_mihomo_schema::{BUILTIN_OUTBOUNDS, CompletionKind, SchemaCatalog};
 use mocode_text::{TextBuffer, TextEdit, TextEditError, TextPosition, TextRange};
 use mocode_yaml::{YamlDocument, YamlPath, YamlPathSegment};
 use std::collections::{BTreeMap, BTreeSet};
-use yaml_rust2::YamlLoader;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditorError {
@@ -225,15 +224,18 @@ impl MocodeEditor {
         let path = self.current_yaml_path(position)?;
         let proxy_index = proxy_index_from_dialer_proxy_path(&path)?;
 
-        // Bug 1: reject if cursor is not on the value portion of "dialer-proxy: <value>"
+        // Reject if cursor is not on the value portion of "dialer-proxy: <value>"
         let line = self.line_text(position.line as usize)?;
         if !cursor_on_dialer_proxy_value(&line, position.character) {
             return None;
         }
 
-        // Bug 2: resolve proxy name from raw YAML (accounts for unnamed proxies
-        // that the semantic index skips, causing index misalignment)
-        let entry = proxy_name_at_index(&self.text.as_string(), proxy_index)?;
+        // Resolve proxy name via source_index (accounts for unnamed proxies
+        // that the semantic index skips, which would misalign a simple
+        // positional lookup into semantic_index.proxies).
+        let entry = self
+            .semantic_index
+            .proxy_name_by_source_index(proxy_index)?;
         self.proxy_chain_preview_for_entry(&entry)
     }
 
@@ -485,19 +487,6 @@ fn cursor_on_dialer_proxy_value(line: &str, character: u32) -> bool {
     // Cursor must be at or past the end of "dialer-proxy" (i.e. on the `:` or value)
     let key_end = indent + "dialer-proxy".len();
     (character as usize) >= key_end
-}
-
-/// Resolves the `name` of the proxy at YAML sequence index `index` by re-parsing
-/// the raw YAML text. This is resilient to unnamed proxies that `extract_proxies`
-/// (in `mocode-mihomo-lint`) skips, which would cause a simple array-index lookup
-/// in `semantic_index.proxies` to resolve the wrong proxy.
-fn proxy_name_at_index(yaml_text: &str, index: usize) -> Option<String> {
-    let docs = YamlLoader::load_from_str(yaml_text).ok()?;
-    let doc = docs.first()?;
-    let proxies = doc["proxies"].as_vec()?;
-    let proxy = proxies.get(index)?;
-    let name = proxy["name"].as_str()?;
-    Some(name.to_string())
 }
 
 #[cfg(test)]

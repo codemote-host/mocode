@@ -24,6 +24,8 @@ pub struct LintDiagnostic {
 pub struct NamedEntity {
     pub name: String,
     pub range: Option<TextRange>,
+    /// Original YAML sequence index (e.g. in `proxies`), when available.
+    pub source_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +77,18 @@ impl SemanticIndex {
         index
     }
 
+    /// Look up a proxy name by its original YAML sequence index in `proxies`.
+    ///
+    /// This accounts for unnamed proxy items that were skipped during indexing,
+    /// which would cause a simple array-index lookup into `self.proxies` to
+    /// resolve the wrong proxy.
+    pub fn proxy_name_by_source_index(&self, index: usize) -> Option<&str> {
+        self.proxies
+            .iter()
+            .find(|proxy| proxy.source_index == Some(index))
+            .map(|proxy| proxy.name.as_str())
+    }
+
     pub fn known_outbounds(&self) -> Vec<&str> {
         self.proxies
             .iter()
@@ -88,7 +102,7 @@ impl SemanticIndex {
             return;
         };
 
-        for proxy in proxies {
+        for (idx, proxy) in proxies.iter().enumerate() {
             let Some(name) = yaml_get(proxy, "name").and_then(yaml_string) else {
                 continue;
             };
@@ -96,6 +110,7 @@ impl SemanticIndex {
             self.proxies.push(NamedEntity {
                 name: name.clone(),
                 range: None,
+                source_index: Some(idx),
             });
 
             if let Some(target) = yaml_get(proxy, "dialer-proxy").and_then(yaml_string) {
@@ -118,7 +133,11 @@ impl SemanticIndex {
                 continue;
             };
 
-            self.proxy_groups.push(NamedEntity { name, range: None });
+            self.proxy_groups.push(NamedEntity {
+                name,
+                range: None,
+                source_index: None,
+            });
 
             if let Some(proxies) = yaml_get(group, "proxies").and_then(Yaml::as_vec) {
                 for proxy in proxies.iter().filter_map(yaml_string) {
@@ -148,6 +167,7 @@ impl SemanticIndex {
                 self.proxy_providers.push(NamedEntity {
                     name: provider_name.to_string(),
                     range: None,
+                    source_index: None,
                 });
             }
         }
@@ -157,6 +177,7 @@ impl SemanticIndex {
                 self.rule_providers.push(NamedEntity {
                     name: provider_name.to_string(),
                     range: None,
+                    source_index: None,
                 });
             }
         }
