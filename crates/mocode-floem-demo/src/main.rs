@@ -127,6 +127,13 @@ struct DemoCompletion {
     documentation: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DemoCompletionPopup {
+    anchor_line: u32,
+    anchor_column: u32,
+    items: Vec<DemoCompletion>,
+}
+
 #[derive(Debug, Clone)]
 struct DemoDocument {
     title: String,
@@ -137,6 +144,7 @@ struct DemoDocument {
     current_yaml_path: String,
     diagnostics: Vec<DemoDiagnostic>,
     completion_items: Vec<DemoCompletion>,
+    completion_popup: Option<DemoCompletionPopup>,
     hover_title: String,
     hover_body: String,
     selection_anchor: Option<TextPosition>,
@@ -157,6 +165,7 @@ impl DemoDocument {
             current_yaml_path: String::new(),
             diagnostics: Vec::new(),
             completion_items: Vec::new(),
+            completion_popup: None,
             hover_title: String::new(),
             hover_body: String::new(),
             selection_anchor: None,
@@ -241,6 +250,7 @@ impl DemoDocument {
                 documentation: completion.documentation,
             })
             .collect();
+        self.completion_popup = build_completion_popup(self.cursor, &self.completion_items);
 
         if let Some(hover) = self.editor.hover_summary_at(self.cursor) {
             self.hover_title = hover.title;
@@ -298,6 +308,17 @@ impl DemoDocument {
         let anchor = self.selection_anchor?;
         (anchor != self.cursor).then(|| TextRange::new(anchor, self.cursor))
     }
+}
+
+fn build_completion_popup(
+    cursor: TextPosition,
+    completion_items: &[DemoCompletion],
+) -> Option<DemoCompletionPopup> {
+    (!completion_items.is_empty()).then(|| DemoCompletionPopup {
+        anchor_line: cursor.line + 1,
+        anchor_column: cursor.character + 1,
+        items: completion_items.iter().take(6).cloned().collect(),
+    })
 }
 
 fn format_selection_range(range: TextRange) -> String {
@@ -361,6 +382,7 @@ fn app_view(document: DemoDocument) -> impl floem::IntoView {
     v_stack((
         header(document),
         completion_strip(document),
+        completion_popup_panel(document),
         h_stack((editor_surface(document), inspector(document))).style(|style| {
             style
                 .flex()
@@ -376,6 +398,55 @@ fn app_view(document: DemoDocument) -> impl floem::IntoView {
             .font_size(13.0)
             .color(color(0x1f, 0x29, 0x37))
             .background(color(0xf7, 0xf9, 0xfc))
+    })
+}
+
+fn completion_popup_panel(document: DocumentSignal) -> impl floem::IntoView {
+    use floem::prelude::*;
+
+    h_stack((
+        dynamic_text_label(move || {
+            document
+                .with(|document| {
+                    document.completion_popup.as_ref().map(|popup| {
+                        format!("Popup @ {}:{}", popup.anchor_line, popup.anchor_column)
+                    })
+                })
+                .unwrap_or_else(|| "Popup @ <none>".to_string())
+        })
+        .style(|style| {
+            style
+                .width(132.0)
+                .font_size(11.0)
+                .color(color(0x64, 0x74, 0x8b))
+        }),
+        dyn_stack(
+            move || {
+                document
+                    .with(|document| {
+                        document
+                            .completion_popup
+                            .as_ref()
+                            .map(|popup| popup.items.iter().take(4).cloned().collect::<Vec<_>>())
+                    })
+                    .unwrap_or_default()
+            },
+            |item| (item.kind.clone(), item.label.clone()),
+            completion_item,
+        )
+        .style(|style| style.gap(8.0)),
+    ))
+    .style(|style| {
+        style
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(8.0)
+            .padding_horiz(16.0)
+            .padding_vert(8.0)
+            .background(floem::prelude::Color::WHITE)
+            .border_bottom(1.0)
+            .border_color(color(0xd9, 0xe2, 0xec))
     })
 }
 
@@ -963,6 +1034,25 @@ mod tests {
                 .completion_items
                 .iter()
                 .any(|item| { item.label == "mixed-port" && item.kind == "field" })
+        );
+    }
+
+    #[test]
+    fn completion_popup_tracks_cursor_anchor_and_items() {
+        let document = DemoDocument::from_text(
+            "dialer.yaml",
+            "proxies:\n  - name: entry\n    type: ss\n    dialer-proxy: \n  - name: exit\n    type: ss\n",
+            TextPosition::new(3, 18),
+        );
+
+        let popup = document.completion_popup.as_ref().unwrap();
+        assert_eq!(popup.anchor_line, 4);
+        assert_eq!(popup.anchor_column, 19);
+        assert!(
+            popup
+                .items
+                .iter()
+                .any(|item| item.label == "exit" && item.kind == "reference")
         );
     }
 

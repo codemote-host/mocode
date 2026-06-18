@@ -93,6 +93,7 @@ For each demo, record:
 - Whether paste inserts clipboard text.
 - Whether diagnostics update after editing invalid YAML.
 - Whether the completion strip updates when the cursor changes.
+- Whether the completion popup anchor changes when the cursor changes.
 - Whether the inspector shows current YAML path, selection summary, hover summary, and diagnostics.
 - Whether focus returns to the editor after interacting with visible panels and fixture selector buttons.
 
@@ -161,7 +162,7 @@ Test both demos with the built-in sample:
 - Hover over `tun.stack` should show Mihomo schema documentation.
 - Hover over `proxies[].dialer-proxy` should explain outbound chaining.
 
-If a UI cannot place a popup yet, record whether the current completion strip still shows the expected items.
+Record whether the popup panel shows the expected `Popup @ line:column` anchor and whether the first few popup items match the completion strip. This is not yet a pixel-accurate floating layer tied to scroll offset.
 
 ## Diagnostic Script
 

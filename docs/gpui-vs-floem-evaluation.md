@@ -14,6 +14,7 @@ Current state:
 - Floem is slightly ahead on reactive semantic display and IME committed text because the demo now stores `DemoDocument` in an `RwSignal`, uses `virtual_stack`, and handles `ImeCommit`.
 - Both demos now expose the same built-in fixture selector, including `Large`, `20k`, `Bad YAML`, `Bad Ref`, and `Cycle`.
 - Both demos now expose the same keyboard selection/copy path through Shift+Left/Right and Ctrl/Cmd+C.
+- Both demos now expose an anchor-aware completion popup panel derived from the current cursor line, column, and shared core completion items.
 - Neither prototype is ready for final selection. The missing decisive data is real manual validation: Chinese IME preedit and commit behavior, smooth scrolling on 5000-20000 lines, focus/popup reliability, keyboard selection/copy ergonomics, and packaged binary size.
 
 Provisional recommendation:
@@ -30,7 +31,7 @@ Local versions:
 | UI dependency | `gpui = "0.2.2"` | `floem = "0.2.0"` |
 | Extra direct UI data dependency | none | `im = "15.1"` for `virtual_stack` data |
 | Shared component API | `mocode-api` | `mocode-api` |
-| Source size | 979 lines | 956 lines |
+| Source size | 1049 lines | 1041 lines |
 | Current core size | `mocode-core` is 513 lines | same |
 | Approximate normal dependency tree lines | 1012 | 506 |
 
@@ -50,6 +51,7 @@ Validation harness status:
 - `mocode-core`, `mocode-gpui-demo`, and `mocode-floem-demo` all have automated 20000-line fixture loading tests.
 - GPUI and Floem demos expose the same built-in fixture selector for large and diagnostic samples.
 - GPUI and Floem demos expose the same keyboard selection/copy state path with shared core range extraction.
+- GPUI and Floem demos expose the same completion popup anchor model and panel.
 - Manual Windows IME, interactive large-file scrolling, keyboard selection/copy ergonomics, focus, popup, and release-size measurements are still open.
 
 ## Acceptance Matrix
@@ -67,6 +69,7 @@ Validation harness status:
 | YAML syntax error rendering | Implemented | Implemented | Diagnostics are displayed from core; row markers exist for ranged diagnostics. |
 | Hover docs | Implemented | Implemented | Both display hover summary from `mocode-core`. |
 | Field-name completion | Implemented | Implemented | Both render current completion items from core. |
+| Completion popup positioning | Anchor-aware panel implemented, needs manual validation | Anchor-aware panel implemented, needs manual validation | Popup records cursor line/column and items. Pixel-level scroll-offset placement is not implemented. |
 | `proxy-groups.proxies` completion | Core implemented, UI path-dependent | Core implemented, UI path-dependent | Core tests cover reference completions. UI needs manual cursor-position checks beyond default sample. |
 | `dialer-proxy` completion | Implemented | Implemented | Default demo position shows outbound reference completions. |
 | Missing reference diagnostic | Implemented | Implemented | Both display diagnostics from core. |
@@ -94,10 +97,11 @@ Risks:
 Implementation details:
 
 - State methods delegate to `MocodeEditor`: `insert_text`, `backspace`, `delete`, `move_left`, `move_right`.
-- Rendering uses a three-area layout: header, completion strip, editor surface, and inspector.
+- Rendering uses header, completion strip, completion popup panel, editor surface, and inspector.
 - The line row displays cursor by splitting text at the current `TextPosition`.
 - Header fixture buttons rebuild `DemoDocument` from static YAML fixtures through `mocode-api`.
 - Selection state is adapter-local, but selected text is extracted by `MocodeEditor::text_in_range`.
+- Completion popup state is adapter-local, but items come from `MocodeEditor::completions_at`.
 
 ## Floem Prototype Notes
 
@@ -123,6 +127,7 @@ Implementation details:
 - Line rows use `DemoVisibleLine` to combine immutable line data and cursor position for rendering.
 - Header fixture buttons update the document signal with a fresh core-backed `DemoDocument`.
 - Selection state is stored in `DemoDocument`, and selected text is extracted by `MocodeEditor::text_in_range`.
+- Completion popup state is stored in `DemoDocument`, and items come from `MocodeEditor::completions_at`.
 
 ## Shared Core Boundary
 
@@ -147,7 +152,7 @@ Reasons:
 - Neither demo has measured smooth scrolling.
 - Chinese IME is not fully tested; Floem has committed text handling, but preedit display is missing, and GPUI needs explicit IME wiring.
 - Package size is not measured.
-- Popup behavior for completion/hover has not been implemented in either framework.
+- Completion popup anchor panels exist, but focus, layering, and pixel-level placement still need manual validation.
 - Keyboard selection/copy has automated state coverage, but system clipboard behavior still needs manual validation.
 
 ## Next Validation Checklist
@@ -160,7 +165,7 @@ Before choosing GPUI or Floem:
 4. Add an automated startup/load timing command for `large.yaml` and `large-20000.yaml`.
 5. Add screenshot-based smoke tests for both demos if the environment supports GUI capture.
 6. Manually validate keyboard selection and system clipboard copy in both demos.
-7. Implement completion popup positioning in both demos.
+7. Manually validate completion popup focus, layering, and anchor behavior in both demos.
 8. Measure packaged binary size for release builds.
 9. Record focus behavior when switching between editor, completion panel, fixture selector, and inspector.
 
@@ -179,4 +184,4 @@ Before choosing GPUI or Floem:
 
 ## Recommended Next Step
 
-Execute the validation harness with the built-in selector and record measured data in this report. After that, implement completion popup positioning or chain preview, depending on which manual validation gap is more costly.
+Execute the validation harness with the built-in selector and record measured data in this report. After that, implement chain preview or pixel-level popup placement, depending on which manual validation gap is more costly.

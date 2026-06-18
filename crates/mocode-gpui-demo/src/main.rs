@@ -120,6 +120,13 @@ struct DemoCompletion {
     documentation: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DemoCompletionPopup {
+    anchor_line: u32,
+    anchor_column: u32,
+    items: Vec<DemoCompletion>,
+}
+
 #[derive(Debug, Clone)]
 struct DemoDocument {
     title: String,
@@ -131,6 +138,7 @@ struct DemoDocument {
     diagnostics: Vec<DemoDiagnostic>,
     completion_labels: Vec<String>,
     completion_items: Vec<DemoCompletion>,
+    completion_popup: Option<DemoCompletionPopup>,
     hover_title: String,
     hover_body: String,
     selection_anchor: Option<TextPosition>,
@@ -150,6 +158,7 @@ impl DemoDocument {
             diagnostics: Vec::new(),
             completion_labels: Vec::new(),
             completion_items: Vec::new(),
+            completion_popup: None,
             hover_title: String::new(),
             hover_body: String::new(),
             selection_anchor: None,
@@ -240,6 +249,7 @@ impl DemoDocument {
             .iter()
             .map(|completion| completion.label.clone())
             .collect();
+        self.completion_popup = build_completion_popup(self.cursor, &self.completion_items);
         if let Some(hover) = self.editor.hover_summary_at(self.cursor) {
             self.hover_title = hover.title;
             self.hover_body = hover.body;
@@ -291,6 +301,17 @@ impl DemoDocument {
         let anchor = self.selection_anchor?;
         (anchor != self.cursor).then(|| TextRange::new(anchor, self.cursor))
     }
+}
+
+fn build_completion_popup(
+    cursor: TextPosition,
+    completion_items: &[DemoCompletion],
+) -> Option<DemoCompletionPopup> {
+    (!completion_items.is_empty()).then(|| DemoCompletionPopup {
+        anchor_line: cursor.line + 1,
+        anchor_column: cursor.character + 1,
+        items: completion_items.iter().take(6).cloned().collect(),
+    })
 }
 
 fn format_selection_range(range: TextRange) -> String {
@@ -510,6 +531,7 @@ mod gpui_app {
                         .size_full()
                         .child(header(&self.document, cx))
                         .child(completion_panel(&self.document))
+                        .child(completion_popup_panel(&self.document))
                         .child(
                             div()
                                 .flex()
@@ -775,6 +797,42 @@ mod gpui_app {
             )
     }
 
+    fn completion_popup_panel(document: &DemoDocument) -> impl IntoElement {
+        let anchor = document
+            .completion_popup
+            .as_ref()
+            .map(|popup| format!("{}:{}", popup.anchor_line, popup.anchor_column))
+            .unwrap_or_else(|| "<none>".to_string());
+
+        let items = document
+            .completion_popup
+            .as_ref()
+            .map(|popup| popup.items.iter().take(4).collect::<Vec<_>>())
+            .unwrap_or_default();
+
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .px_4()
+            .py_2()
+            .bg(rgb(0xffffff))
+            .border_b_1()
+            .border_color(rgb(0xd9e2ec))
+            .child(
+                div()
+                    .w(px(132.0))
+                    .text_color(rgb(0x64748b))
+                    .text_size(px(11.0))
+                    .child(format!("Popup @ {anchor}")),
+            )
+            .when(items.is_empty(), |this| {
+                this.child(div().text_color(rgb(0x64748b)).child("<none>"))
+            })
+            .children(items.into_iter().map(completion_item))
+    }
+
     fn section(title: &'static str, value: String) -> impl IntoElement {
         div()
             .flex()
@@ -962,6 +1020,25 @@ mod tests {
                     .as_deref()
                     .is_some_and(|text| !text.is_empty())
         }));
+    }
+
+    #[test]
+    fn completion_popup_tracks_cursor_anchor_and_items() {
+        let document = DemoDocument::from_text(
+            "dialer.yaml",
+            "proxies:\n  - name: entry\n    type: ss\n    dialer-proxy: \n  - name: exit\n    type: ss\n",
+            TextPosition::new(3, 18),
+        );
+
+        let popup = document.completion_popup.as_ref().unwrap();
+        assert_eq!(popup.anchor_line, 4);
+        assert_eq!(popup.anchor_column, 19);
+        assert!(
+            popup
+                .items
+                .iter()
+                .any(|item| item.label == "exit" && item.kind == "reference")
+        );
     }
 
     #[test]
