@@ -2,7 +2,13 @@
 
 Date: 2026-06-18
 
-This is the first repository-backed evaluation of GPUI and Floem as UI carriers for mocode. It compares the current prototypes only. It is not a final framework selection.
+This report records the repository-backed GPUI/Floem comparison that led to the first UI framework decision for mocode. The project will continue product work on GPUI and keep Floem as a frozen reference prototype.
+
+## Decision
+
+- GPUI is the selected primary UI framework for mocode product work.
+- Floem is retained as a buildable reference adapter while it remains useful for comparison, but new mocode features no longer require GPUI/Floem parity.
+- The formal decision record is [ui-framework-decision.md](ui-framework-decision.md).
 
 ## Executive Summary
 
@@ -15,11 +21,11 @@ Current state:
 - Both demos now expose the same built-in fixture selector, including `Large`, `20k`, `Bad YAML`, `Bad Ref`, and `Cycle`.
 - Both demos now expose the same keyboard selection/copy path through Shift+Left/Right and Ctrl/Cmd+C.
 - Both demos now expose an anchor-aware completion popup panel derived from the current cursor line, column, and shared core completion items.
-- Neither prototype is ready for final selection. The missing decisive data is real manual validation: Chinese IME preedit and commit behavior, smooth scrolling on 5000-20000 lines, focus/popup reliability, keyboard selection/copy ergonomics, and packaged binary size.
+- GPUI still needs product-readiness validation: Chinese IME preedit and commit behavior, smooth scrolling on 5000-20000 lines, focus/popup reliability, keyboard selection/copy ergonomics, and packaged binary size.
 
-Provisional recommendation:
+Recommendation:
 
-Continue one more validation slice before selecting a primary UI framework. If forced to choose only from current repository facts, keep both candidates active: GPUI remains the higher-confidence editor-shell candidate; Floem remains the simpler reactive adapter candidate with a smaller observed dependency tree.
+Stop parity-driven UI work. Continue GPUI componentization while keeping `mocode-core` and `mocode-api` independent of GPUI. Use Floem only as a reference for adapter boundaries and reactive UI tradeoffs.
 
 ## Evidence Snapshot
 
@@ -52,7 +58,7 @@ Validation harness status:
 - GPUI and Floem demos expose the same built-in fixture selector for large and diagnostic samples.
 - GPUI and Floem demos expose the same keyboard selection/copy state path with shared core range extraction.
 - GPUI and Floem demos expose the same completion popup anchor model and panel.
-- Manual Windows IME, interactive large-file scrolling, keyboard selection/copy ergonomics, focus, popup, and release-size measurements are still open.
+- Manual Windows IME, interactive large-file scrolling, keyboard selection/copy ergonomics, focus, popup, and release-size measurements are still open and should prioritize GPUI.
 
 ## Acceptance Matrix
 
@@ -142,31 +148,31 @@ The current architecture is holding:
 
 This means framework selection can stay focused on rendering, input, focus, performance, packaging, and maintainability instead of re-litigating Mihomo semantics.
 
-## Current Decision Pressure
+## Current Decision
 
-Do not select a final framework yet.
+GPUI is selected as the primary UI framework.
 
-Reasons:
+Remaining risks:
 
 - Chain preview is not implemented in core.
-- Neither demo has measured smooth scrolling.
-- Chinese IME is not fully tested; Floem has committed text handling, but preedit display is missing, and GPUI needs explicit IME wiring.
+- GPUI has not measured smooth scrolling on the large fixtures.
+- GPUI Chinese IME is not fully tested and still needs explicit IME wiring.
 - Package size is not measured.
-- Completion popup anchor panels exist, but focus, layering, and pixel-level placement still need manual validation.
-- Keyboard selection/copy has automated state coverage, but system clipboard behavior still needs manual validation.
+- GPUI completion popup focus, layering, and pixel-level placement still need manual validation.
+- GPUI keyboard selection/copy has automated state coverage, but system clipboard behavior still needs manual validation.
 
-## Next Validation Checklist
+## Next GPUI Validation Checklist
 
-Before choosing GPUI or Floem:
+Before turning the GPUI prototype into the production component shell:
 
 1. Execute [prototype-validation-checklist.md](prototype-validation-checklist.md) on Windows.
-2. Record Chinese IME commit and preedit behavior for both demos.
-3. Use the built-in selector to record `Large` and `20k` interactive scroll behavior.
+2. Record GPUI Chinese IME commit and preedit behavior.
+3. Use the built-in selector to record GPUI `Large` and `20k` interactive scroll behavior.
 4. Add an automated startup/load timing command for `large.yaml` and `large-20000.yaml`.
-5. Add screenshot-based smoke tests for both demos if the environment supports GUI capture.
-6. Manually validate keyboard selection and system clipboard copy in both demos.
-7. Manually validate completion popup focus, layering, and anchor behavior in both demos.
-8. Measure packaged binary size for release builds.
+5. Add screenshot-based smoke tests for the GPUI demo if the environment supports GUI capture.
+6. Manually validate GPUI keyboard selection and system clipboard copy.
+7. Manually validate GPUI completion popup focus, layering, and anchor behavior.
+8. Measure GPUI packaged binary size for release builds.
 9. Record focus behavior when switching between editor, completion panel, fixture selector, and inspector.
 
 ## Provisional Scorecard
@@ -180,8 +186,8 @@ Before choosing GPUI or Floem:
 | Core boundary preservation | Tie | Both adapters keep Mihomo logic out of UI code. |
 | Large row virtualization | Tie | GPUI `uniform_list`; Floem `virtual_stack`. Manual performance testing still needed. |
 | Current code size | Tie | 691 vs 708 lines is not meaningfully different. |
-| Final selection readiness | Neither | Missing manual validation and acceptance items. |
+| Selected framework | GPUI | Project decision favors editor-shell ergonomics and GPUI componentization. |
 
 ## Recommended Next Step
 
-Execute the validation harness with the built-in selector and record measured data in this report. After that, implement chain preview or pixel-level popup placement, depending on which manual validation gap is more costly.
+Execute the GPUI validation checklist with the built-in selector and record measured data in this report. After that, implement `proxy_chain_preview_at` or begin GPUI component-shell extraction, depending on which gap blocks the next user-visible slice.

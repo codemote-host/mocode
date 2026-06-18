@@ -2,15 +2,15 @@
 
 Date: 2026-06-18
 
-This checklist is the repeatable validation baseline for the GPUI and Floem mocode prototypes. It is not a final framework decision. Its job is to make the remaining evidence explicit before choosing a UI carrier.
+This checklist is the repeatable validation baseline for the mocode UI prototypes. After the GPUI decision, GPUI is the primary validation target. Floem checks are optional reference checks unless a regression affects shared core boundaries.
 
 ## Scope
 
 Validate only the editor component prototype boundary:
 
 - shared `mocode-core` semantics
-- GPUI adapter behavior
-- Floem adapter behavior
+- GPUI adapter behavior as the primary product path
+- Floem adapter behavior as a frozen reference path
 - large YAML loading baseline
 - Windows Chinese IME behavior
 - focus, popup, scroll, clipboard, and packaging observations
@@ -73,14 +73,14 @@ Record binary size in bytes and note whether the build includes debug symbols, p
 
 ## Manual Launch Smoke
 
-Run each demo separately:
+Run the GPUI demo first. Floem is optional reference validation.
 
 ```powershell
 cargo run -p mocode-gpui-demo
 cargo run -p mocode-floem-demo
 ```
 
-For each demo, record:
+For each demo that is run, record:
 
 - OS and display scaling.
 - Whether the window opens reliably.
@@ -101,7 +101,7 @@ Use the fixture selector to switch to `Large`, `20k`, `Bad YAML`, `Bad Ref`, and
 
 ## Windows Chinese IME Script
 
-Run on Windows with a Chinese IME enabled. Test GPUI and Floem separately.
+Run on Windows with a Chinese IME enabled. Test GPUI first; test Floem only when reference data is useful.
 
 1. Focus the editor surface.
 2. Move the cursor to a scalar value position, for example after `name:`.
@@ -125,7 +125,7 @@ Record these fields:
 
 ## Scroll And Focus Script
 
-Use the fixture selector to load `Large` and `20k` in each demo.
+Use the fixture selector to load `Large` and `20k` in the GPUI demo first. Floem is optional reference validation.
 
 Record:
 
@@ -140,7 +140,7 @@ Record:
 
 ## Selection And Copy Script
 
-Run on both demos:
+Run on the GPUI demo first. Floem is optional reference validation.
 
 1. Focus the editor surface.
 2. Move to a scalar text position.
@@ -153,7 +153,7 @@ Run on both demos:
 
 ## Completion And Hover Script
 
-Test both demos with the built-in sample:
+Test the GPUI demo with the built-in sample. Floem is optional reference validation:
 
 - Root field completion at the first line should include `mixed-port`.
 - `dns.enhanced-mode` completion should include `fake-ip`.
@@ -181,15 +181,15 @@ The selector labels for these are `Bad YAML`, `Bad Ref`, and `Cycle`.
 |  |  |  | GPUI |  | Pass / Fail / Blocked / Not run |  |
 |  |  |  | Floem |  | Pass / Fail / Blocked / Not run |  |
 
-## Decision Gate
+## GPUI Readiness Gate
 
-Do not select GPUI or Floem until these items are recorded:
+GPUI is already selected as the primary UI framework. Do not treat the GPUI prototype as a production component shell until these items are recorded:
 
-- Windows Chinese IME commit and preedit behavior.
-- Interactive scroll behavior with a 5000-20000 line YAML file.
-- Focus behavior around completion and hover surfaces.
-- Keyboard selection and copy ergonomics on both demos.
-- Release binary sizes for both demos.
+- GPUI Windows Chinese IME commit and preedit behavior.
+- GPUI interactive scroll behavior with a 5000-20000 line YAML file.
+- GPUI focus behavior around completion and hover surfaces.
+- GPUI keyboard selection and copy ergonomics.
+- GPUI release binary size.
 - Updated evidence in `docs/gpui-vs-floem-evaluation.md`.
 
-Until then, the correct decision remains: keep both prototypes alive and continue validating the UI boundary without moving Mihomo semantics into either adapter.
+Until then, continue GPUI work behind the UI-independent `mocode-core` and `mocode-api` boundary. Do not move Mihomo semantics into the GPUI adapter.

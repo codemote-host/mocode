@@ -64,15 +64,19 @@ Deliverables:
 Deliverables:
 
 - Floem adapter over `mocode-core`
-- same feature checklist as GPUI prototype
+- same early feature checklist as GPUI prototype
 - no copied Mihomo business logic
-- IME and performance notes
+- reference notes for comparison
+- frozen reference status after GPUI selection
 
 ## Phase 4: Comparison Evaluation
 
-Deliverable: [gpui-vs-floem-evaluation.md](gpui-vs-floem-evaluation.md)
+Deliverables:
 
-Status: initial report and [prototype-validation-checklist.md](prototype-validation-checklist.md) available. The current report compares repository-backed prototype facts and keeps final framework selection open until manual IME, interactive large-file scroll, focus, popup, and package-size validation is complete.
+- [gpui-vs-floem-evaluation.md](gpui-vs-floem-evaluation.md)
+- [ui-framework-decision.md](ui-framework-decision.md)
+
+Status: GPUI selected as the primary UI framework on 2026-06-18. Floem is retained as a frozen reference prototype. Manual IME, interactive large-file scroll, focus, popup, and package-size validation should now prioritize the GPUI path.
 
 Evaluation dimensions:
 
@@ -90,8 +94,8 @@ Evaluation dimensions:
 
 Deliverables:
 
-- chosen UI framework
-- production component API
+- GPUI component shell
+- production component API over UI-independent `mocode-core`
 - packaging strategy
 - host application integration notes
 - full fixture suite
