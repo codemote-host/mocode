@@ -4,7 +4,8 @@ use std::{
 };
 
 use mocode_api::{
-    CompletionKind, DiagnosticSeverity, EditorError, MocodeEditor, TextPosition, TextRange,
+    CompletionKind, DiagnosticSeverity, EditorError, MocodeEditor, ProxyChainPreview,
+    ProxyChainStatus, TextPosition, TextRange,
 };
 
 use gpui::{
@@ -82,6 +83,7 @@ pub(crate) struct GpuiEditorDocument {
     pub(crate) completion_popup: Option<GpuiEditorCompletionPopup>,
     pub(crate) hover_title: String,
     pub(crate) hover_body: String,
+    pub(crate) chain_preview: Option<ProxyChainPreview>,
     selection_anchor: Option<TextPosition>,
     pub(crate) selection_summary: String,
 }
@@ -146,6 +148,7 @@ impl GpuiEditorDocument {
             completion_popup: None,
             hover_title: String::new(),
             hover_body: String::new(),
+            chain_preview: None,
             selection_anchor: None,
             selection_summary: String::new(),
         };
@@ -299,6 +302,7 @@ impl GpuiEditorDocument {
             .selected_range()
             .map(format_selection_range)
             .unwrap_or_else(|| "<none>".to_string());
+        self.chain_preview = self.editor.proxy_chain_preview_at(self.cursor);
     }
 
     fn ensure_selection_anchor(&mut self) {
@@ -610,6 +614,62 @@ fn completion_popup_panel(document: &GpuiEditorDocument) -> impl IntoElement {
         .children(items.into_iter().map(completion_item))
 }
 
+fn chain_preview_section(document: &GpuiEditorDocument) -> impl IntoElement {
+    let (steps_text, status_text, status_color, message) =
+        if let Some(preview) = &document.chain_preview {
+            let steps = preview.steps.join(" -> ");
+            let status = match preview.status {
+                ProxyChainStatus::Complete => "Complete",
+                ProxyChainStatus::MissingReference => "MissingReference",
+                ProxyChainStatus::Cycle => "Cycle",
+            };
+            let color = match preview.status {
+                ProxyChainStatus::Complete => rgb(0x16a34a),
+                ProxyChainStatus::MissingReference => rgb(0xa16207),
+                ProxyChainStatus::Cycle => rgb(0xb42318),
+            };
+            let msg = preview.message.clone().unwrap_or_default();
+            (steps, status.to_string(), color, msg)
+        } else {
+            (
+                "<none>".to_string(),
+                String::new(),
+                rgb(0x64748b),
+                String::new(),
+            )
+        };
+
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .mb_4()
+        .child(label("Chain Preview"))
+        .child(
+            div()
+                .text_color(rgb(0x1f2937))
+                .line_height(px(18.0))
+                .child(steps_text),
+        )
+        .when(!status_text.is_empty(), |this| {
+            this.child(
+                div()
+                    .text_color(status_color)
+                    .text_size(px(12.0))
+                    .child(status_text),
+            )
+        })
+        .when(!message.is_empty(), |this| {
+            this.child(
+                div()
+                    .text_color(rgb(0x64748b))
+                    .text_size(px(11.0))
+                    .line_height(px(16.0))
+                    .child(message),
+            )
+        })
+}
+
 fn inspector(document: &GpuiEditorDocument) -> impl IntoElement {
     div()
         .w(px(300.0))
@@ -655,6 +715,7 @@ fn inspector(document: &GpuiEditorDocument) -> impl IntoElement {
                 format!("{}\n{}", document.hover_title, document.hover_body)
             },
         ))
+        .child(chain_preview_section(document))
         .child(
             div()
                 .flex()
@@ -665,7 +726,6 @@ fn inspector(document: &GpuiEditorDocument) -> impl IntoElement {
                 .children(document.diagnostics.iter().map(diagnostic_row)),
         )
 }
-
 fn line_row(
     index: usize,
     number: u32,

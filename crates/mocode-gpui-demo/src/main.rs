@@ -14,7 +14,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use mocode_api::TextPosition;
+    use mocode_api::{ProxyChainStatus, TextPosition};
 
     use crate::{
         app,
@@ -368,5 +368,73 @@ mod tests {
         assert!(document.line_count > 0);
         assert_eq!(document.lines[0].number, 1);
         assert!(document.completion_labels.contains(&"exit".to_string()));
+    }
+
+    // ── chain preview tests ──
+
+    #[test]
+    fn chain_preview_shows_steps_for_dialer_proxy_position() {
+        let document = GpuiEditorDocument::from_text(
+            "chain.yaml",
+            "proxies:\n  - name: entry\n    type: ss\n    dialer-proxy: mid\n  - name: mid\n    type: ss\n    dialer-proxy: exit\n  - name: exit\n    type: ss\n",
+            TextPosition::new(3, 20),
+        );
+
+        let preview = document.chain_preview.as_ref().unwrap();
+        assert_eq!(
+            preview.steps,
+            vec!["Local", "entry", "mid", "exit", "Target"]
+        );
+        assert_eq!(preview.status, ProxyChainStatus::Complete);
+        assert!(preview.is_definite);
+    }
+
+    #[test]
+    fn chain_preview_shows_missing_reference_for_bad_target() {
+        let document = GpuiEditorDocument::from_text(
+            "missing.yaml",
+            "proxies:\n  - name: entry\n    type: ss\n    dialer-proxy: missing\n",
+            TextPosition::new(3, 22),
+        );
+
+        let preview = document.chain_preview.as_ref().unwrap();
+        assert_eq!(preview.status, ProxyChainStatus::MissingReference);
+        assert!(
+            preview
+                .message
+                .as_deref()
+                .is_some_and(|msg| msg.contains("missing"))
+        );
+        assert!(!preview.is_definite);
+    }
+
+    #[test]
+    fn chain_preview_shows_cycle_for_cycle_fixture() {
+        let document = GpuiEditorDocument::from_text(
+            "cycle.yaml",
+            include_str!("../../../tests/fixtures/dialer-cycle.yaml"),
+            TextPosition::new(10, 20),
+        );
+
+        let preview = document.chain_preview.as_ref().unwrap();
+        assert_eq!(preview.status, ProxyChainStatus::Cycle);
+        assert!(
+            preview
+                .message
+                .as_deref()
+                .is_some_and(|msg| msg.contains("cycle"))
+        );
+        assert!(!preview.is_definite);
+    }
+
+    #[test]
+    fn chain_preview_is_none_for_non_dialer_proxy_position() {
+        let document = GpuiEditorDocument::from_text(
+            "not-chain.yaml",
+            "mixed-port: 7890\n",
+            TextPosition::new(0, 0),
+        );
+
+        assert!(document.chain_preview.is_none());
     }
 }
