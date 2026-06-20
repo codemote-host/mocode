@@ -13,8 +13,8 @@ use mocode_api::{
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, ElementInputHandler, EntityInputHandler, FocusHandle,
-    IntoElement, KeyBinding, MouseButton, MouseDownEvent, Pixels, Point, Window, actions, canvas,
-    div, point, prelude::*, px, rgb, uniform_list,
+    IntoElement, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
+    Point, Window, actions, canvas, div, point, prelude::*, px, rgb, uniform_list,
 };
 
 const LINE_HEIGHT_PX: f32 = 22.0;
@@ -359,6 +359,25 @@ impl GpuiEditorDocument {
         self.cursor = self.editor.move_down(self.cursor)?;
         self.refresh_derived();
         Ok(())
+    }
+
+    pub(crate) fn begin_selection_at(&mut self, position: TextPosition) {
+        self.cursor = position;
+        self.selection_anchor = Some(position);
+        self.refresh_derived();
+    }
+
+    pub(crate) fn select_to(&mut self, position: TextPosition) {
+        self.ensure_selection_anchor();
+        self.cursor = position;
+        self.refresh_derived();
+    }
+
+    pub(crate) fn finish_selection(&mut self) {
+        if self.selected_range().is_none() {
+            self.clear_selection();
+            self.refresh_derived();
+        }
     }
 
     pub(crate) fn selected_text(&self) -> Option<String> {
@@ -832,6 +851,7 @@ pub(crate) struct GpuiEditorComponent {
     document: GpuiEditorDocument,
     focus_handle: FocusHandle,
     line_list_bounds: Rc<RefCell<Option<Bounds<Pixels>>>>,
+    mouse_selecting: bool,
 }
 
 impl GpuiEditorComponent {
@@ -840,6 +860,7 @@ impl GpuiEditorComponent {
             document,
             focus_handle,
             line_list_bounds: Rc::new(RefCell::new(None)),
+            mouse_selecting: false,
         }
     }
 
@@ -861,6 +882,30 @@ impl GpuiEditorComponent {
 
     pub(crate) fn line_list_bounds(&self) -> Option<Bounds<Pixels>> {
         *self.line_list_bounds.borrow()
+    }
+
+    fn begin_mouse_selection(&mut self, position: TextPosition) {
+        self.mouse_selecting = true;
+        self.document.begin_selection_at(position);
+    }
+
+    fn update_mouse_selection(&mut self, position: TextPosition) -> bool {
+        if !self.mouse_selecting {
+            return false;
+        }
+
+        self.document.select_to(position);
+        true
+    }
+
+    fn finish_mouse_selection(&mut self) -> bool {
+        if !self.mouse_selecting {
+            return false;
+        }
+
+        self.mouse_selecting = false;
+        self.document.finish_selection();
+        true
     }
 
     fn insert_text(&mut self, text: &str) -> Result<(), EditorError> {
@@ -1244,36 +1289,41 @@ where
                     let focus_handle = this.editor_component().focus_handle().clone();
                     focus_handle.focus(window);
 
-                    let y: f32 = event.position.y.into();
-                    let x: f32 = event.position.x.into();
+                    let position = mouse_event_text_position(
+                        this.editor_component().document(),
+                        this.editor_component().line_list_bounds(),
+                        event.position,
+                    );
+                    if let Some(position) = position {
+                        this.editor_component_mut().begin_mouse_selection(position);
+                        cx.notify();
+                    }
+                },
+            ),
+        )
+        .on_mouse_move(cx.listener(
+            |this: &mut T, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<T>| {
+                if !event.dragging() {
+                    return;
+                }
 
-                    let document = this.editor_component().document();
-                    let Some(line_list_bounds) = this.editor_component().line_list_bounds() else {
-                        return;
-                    };
-                    let editor_origin_y: f32 = line_list_bounds.top().into();
-                    let editor_origin_x: f32 = line_list_bounds.left().into();
-                    if let Some(position) = mouse_to_text_position(
-                        y,
-                        x,
-                        editor_origin_y,
-                        editor_origin_x,
-                        GUTTER_WIDTH_PX,
-                        CHAR_WIDTH_PX,
-                        LINE_HEIGHT_PX,
-                        document.line_count,
-                        |line| {
-                            document
-                                .editor
-                                .line_end_position(line as usize)
-                                .map(|pos| pos.character)
-                                .unwrap_or(0)
-                        },
-                    ) {
-                        let doc = this.editor_component_mut().document_mut();
-                        doc.cursor = position;
-                        doc.clear_selection();
-                        doc.refresh_derived();
+                let position = mouse_event_text_position(
+                    this.editor_component().document(),
+                    this.editor_component().line_list_bounds(),
+                    event.position,
+                );
+                if let Some(position) = position
+                    && this.editor_component_mut().update_mouse_selection(position)
+                {
+                    cx.notify();
+                }
+            },
+        ))
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(
+                |this: &mut T, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<T>| {
+                    if this.editor_component_mut().finish_mouse_selection() {
                         cx.notify();
                     }
                 },
@@ -1520,6 +1570,36 @@ fn char_to_byte_index(text: &str, char_index: u32) -> usize {
         .nth(char_index as usize)
         .map(|(i, _)| i)
         .unwrap_or(text.len())
+}
+
+fn mouse_event_text_position(
+    document: &GpuiEditorDocument,
+    line_list_bounds: Option<Bounds<Pixels>>,
+    position: Point<Pixels>,
+) -> Option<TextPosition> {
+    let line_list_bounds = line_list_bounds?;
+    let y: f32 = position.y.into();
+    let x: f32 = position.x.into();
+    let editor_origin_y: f32 = line_list_bounds.top().into();
+    let editor_origin_x: f32 = line_list_bounds.left().into();
+
+    mouse_to_text_position(
+        y,
+        x,
+        editor_origin_y,
+        editor_origin_x,
+        GUTTER_WIDTH_PX,
+        CHAR_WIDTH_PX,
+        LINE_HEIGHT_PX,
+        document.line_count,
+        |line| {
+            document
+                .editor
+                .line_end_position(line as usize)
+                .map(|pos| pos.character)
+                .unwrap_or(0)
+        },
+    )
 }
 
 /// Convert a window-space mouse coordinate into a `TextPosition`.

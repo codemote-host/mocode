@@ -533,6 +533,73 @@ mod tests {
     }
 
     #[test]
+    fn mouse_drag_selection_selects_forward_text() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enhanced-mode: fake-ip\n",
+            TextPosition::new(0, 0),
+        );
+
+        document.begin_selection_at(TextPosition::new(1, 2));
+        document.select_to(TextPosition::new(1, 15));
+        document.finish_selection();
+
+        assert_eq!(document.selected_text().unwrap(), "enhanced-mode");
+        assert_eq!(document.cursor, TextPosition::new(1, 15));
+        assert_eq!(document.selection_summary, "2:3 -> 2:16");
+    }
+
+    #[test]
+    fn mouse_drag_selection_selects_reversed_text() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enhanced-mode: fake-ip\n",
+            TextPosition::new(0, 0),
+        );
+
+        document.begin_selection_at(TextPosition::new(1, 15));
+        document.select_to(TextPosition::new(1, 2));
+        document.finish_selection();
+
+        assert_eq!(document.selected_text().unwrap(), "enhanced-mode");
+        assert_eq!(document.cursor, TextPosition::new(1, 2));
+        assert_eq!(document.selection_summary, "2:3 -> 2:16");
+    }
+
+    #[test]
+    fn mouse_click_without_drag_clears_previous_selection() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enhanced-mode: fake-ip\n",
+            TextPosition::new(1, 2),
+        );
+
+        for _ in 0.."enhanced-mode".chars().count() {
+            document.select_right().unwrap();
+        }
+        assert!(document.selected_text().is_some());
+
+        document.begin_selection_at(TextPosition::new(0, 3));
+        document.finish_selection();
+
+        assert_eq!(document.cursor, TextPosition::new(0, 3));
+        assert!(document.selected_text().is_none());
+        assert_eq!(document.selection_summary, "<none>");
+    }
+
+    #[test]
+    fn editor_surface_wires_mouse_drag_selection_handlers() {
+        let component_source = include_str!("component.rs");
+
+        assert!(component_source.contains(".on_mouse_down("));
+        assert!(component_source.contains(".on_mouse_move("));
+        assert!(component_source.contains(".on_mouse_up("));
+        assert!(component_source.contains("begin_mouse_selection"));
+        assert!(component_source.contains("update_mouse_selection"));
+        assert!(component_source.contains("finish_mouse_selection"));
+    }
+
+    #[test]
     fn document_text_returns_current_core_text() {
         let mut document = GpuiEditorDocument::from_text(
             "scratch.yaml",
