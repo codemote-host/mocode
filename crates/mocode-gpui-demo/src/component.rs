@@ -1,6 +1,8 @@
 use std::{
+    cell::RefCell,
     fs, io,
     path::{Path, PathBuf},
+    rc::Rc,
 };
 
 use mocode_api::{
@@ -9,8 +11,8 @@ use mocode_api::{
 };
 
 use gpui::{
-    App, ClipboardItem, Context, FocusHandle, IntoElement, KeyBinding, KeyDownEvent, MouseButton,
-    MouseDownEvent, Window, actions, div, prelude::*, px, rgb, uniform_list,
+    App, Bounds, ClipboardItem, Context, FocusHandle, IntoElement, KeyBinding, KeyDownEvent,
+    MouseButton, MouseDownEvent, Pixels, Window, actions, div, prelude::*, px, rgb, uniform_list,
 };
 
 actions!(
@@ -404,6 +406,7 @@ impl GpuiEditorDocument {
 pub(crate) struct GpuiEditorComponent {
     document: GpuiEditorDocument,
     focus_handle: FocusHandle,
+    line_list_bounds: Rc<RefCell<Option<Bounds<Pixels>>>>,
 }
 
 impl GpuiEditorComponent {
@@ -411,6 +414,7 @@ impl GpuiEditorComponent {
         Self {
             document,
             focus_handle,
+            line_list_bounds: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -428,6 +432,14 @@ impl GpuiEditorComponent {
 
     pub(crate) fn focus_handle(&self) -> &FocusHandle {
         &self.focus_handle
+    }
+
+    fn line_list_bounds_handle(&self) -> Rc<RefCell<Option<Bounds<Pixels>>>> {
+        Rc::clone(&self.line_list_bounds)
+    }
+
+    fn line_list_bounds(&self) -> Option<Bounds<Pixels>> {
+        *self.line_list_bounds.borrow()
     }
 
     pub(crate) fn focus(&self, window: &mut Window) {
@@ -561,6 +573,7 @@ where
     T: GpuiEditorHost + 'static,
 {
     let line_count = editor.document().line_count;
+    let line_list_bounds = editor.line_list_bounds_handle();
     div()
         .w(px(820.0))
         .h_full()
@@ -696,26 +709,32 @@ where
 
                     let y: f32 = event.position.y.into();
                     let x: f32 = event.position.x.into();
-                    let text_x = x - GUTTER_WIDTH;
 
-                    if text_x >= 0.0 && y >= 0.0 {
-                        let document = this.editor_component().document();
-                        let max_line = document.line_count.saturating_sub(1) as u32;
-                        let line = ((y / LINE_HEIGHT) as u32).min(max_line);
-                        let character = if text_x > 0.0 {
-                            (text_x / CHAR_WIDTH) as u32
-                        } else {
-                            0
-                        };
-                        let character = character.min(
+                    let document = this.editor_component().document();
+                    let Some(line_list_bounds) = this.editor_component().line_list_bounds() else {
+                        return;
+                    };
+                    let editor_origin_y: f32 = line_list_bounds.top().into();
+                    let editor_origin_x: f32 = line_list_bounds.left().into();
+                    if let Some(position) = mouse_to_text_position(
+                        y,
+                        x,
+                        editor_origin_y,
+                        editor_origin_x,
+                        GUTTER_WIDTH,
+                        CHAR_WIDTH,
+                        LINE_HEIGHT,
+                        document.line_count,
+                        |line| {
                             document
                                 .editor
                                 .line_end_position(line as usize)
                                 .map(|pos| pos.character)
-                                .unwrap_or(0),
-                        );
+                                .unwrap_or(0)
+                        },
+                    ) {
                         let doc = this.editor_component_mut().document_mut();
-                        doc.cursor = TextPosition::new(line, character);
+                        doc.cursor = position;
                         doc.clear_selection();
                         doc.refresh_derived();
                         cx.notify();
@@ -723,6 +742,9 @@ where
                 },
             ),
         )
+        .on_children_prepainted(move |children_bounds, _, _| {
+            *line_list_bounds.borrow_mut() = children_bounds.first().copied();
+        })
         .child(
             uniform_list(
                 "mocode-lines",
@@ -1039,6 +1061,179 @@ fn char_to_byte_index(text: &str, char_index: u32) -> usize {
         .nth(char_index as usize)
         .map(|(i, _)| i)
         .unwrap_or(text.len())
+}
+
+/// Convert a window-space mouse coordinate into a `TextPosition`.
+///
+/// `editor_origin_x` and `editor_origin_y` are the actual window-space origin
+/// of the rendered line list, captured from GPUI layout bounds during prepaint.
+fn mouse_to_text_position(
+    window_y: f32,
+    window_x: f32,
+    editor_origin_y: f32,
+    editor_origin_x: f32,
+    gutter_width: f32,
+    char_width: f32,
+    line_height: f32,
+    line_count: usize,
+    get_line_length: impl Fn(u32) -> u32,
+) -> Option<TextPosition> {
+    let local_x = window_x - editor_origin_x;
+    let text_x = local_x - gutter_width;
+    if text_x < 0.0 || window_y < editor_origin_y {
+        return None;
+    }
+
+    let max_line = line_count.saturating_sub(1) as u32;
+    let line = (((window_y - editor_origin_y) / line_height) as u32).min(max_line);
+    let character = if text_x > 0.0 {
+        (text_x / char_width) as u32
+    } else {
+        0
+    };
+    let character = character.min(get_line_length(line));
+    Some(TextPosition::new(line, character))
+}
+
+#[cfg(test)]
+mod mouse_tests {
+    use super::*;
+
+    fn test_line_lengths(line: u32) -> u32 {
+        match line {
+            0 => 8,  // "line one"
+            1 => 8,  // "line two"
+            2 => 10, // "line three"
+            _ => 0,
+        }
+    }
+
+    #[test]
+    fn click_top_of_text_area_maps_to_line_zero() {
+        // editor origin at y=120, clicking at y=125 → line 0
+        let pos = mouse_to_text_position(
+            125.0,
+            100.0, // window y, x
+            120.0, // editor_origin_y
+            0.0,   // editor_origin_x
+            64.0,  // gutter
+            7.5,   // char width
+            22.0,  // line height
+            3,     // line_count
+            test_line_lengths,
+        )
+        .unwrap();
+        assert_eq!(pos.line, 0);
+        assert!(pos.character > 0); // x=100 > gutter=64, so some column
+    }
+
+    #[test]
+    fn click_below_editor_origin_is_rejected() {
+        assert!(
+            mouse_to_text_position(
+                10.0,
+                100.0, // y < editor_origin_y
+                120.0,
+                0.0,
+                64.0,
+                7.5,
+                22.0,
+                3,
+                test_line_lengths
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn click_left_of_gutter_is_rejected() {
+        let pos = mouse_to_text_position(
+            130.0,
+            50.0, // x=50 < gutter=64 → text_x negative → None
+            120.0,
+            0.0,
+            64.0,
+            7.5,
+            22.0,
+            3,
+            test_line_lengths,
+        );
+        // text_x < 0 should return None (click on gutter, don't move)
+        assert!(pos.is_none());
+    }
+
+    #[test]
+    fn click_past_line_end_clamps_to_line_end() {
+        let pos = mouse_to_text_position(
+            125.0,
+            500.0, // x far to the right
+            120.0,
+            0.0,
+            64.0,
+            7.5,
+            22.0,
+            3,
+            test_line_lengths,
+        )
+        .unwrap();
+        assert_eq!(pos.line, 0);
+        // column clamped to line 0 length (8)
+        assert_eq!(pos.character, 8);
+    }
+
+    #[test]
+    fn click_below_last_line_clamps_to_last_line() {
+        let pos = mouse_to_text_position(
+            300.0,
+            100.0, // y far down
+            120.0,
+            0.0,
+            64.0,
+            7.5,
+            22.0,
+            3,
+            test_line_lengths,
+        )
+        .unwrap();
+        assert_eq!(pos.line, 2); // last line (line_count=3, indices 0-2)
+    }
+
+    #[test]
+    fn click_on_second_line_returns_line_one() {
+        let pos = mouse_to_text_position(
+            120.0 + 22.0 + 5.0, // origin + 1 line + 5px into line 1
+            100.0,
+            120.0,
+            0.0,
+            64.0,
+            7.5,
+            22.0,
+            3,
+            test_line_lengths,
+        )
+        .unwrap();
+        assert_eq!(pos.line, 1);
+    }
+
+    #[test]
+    fn click_with_nonzero_editor_x_uses_local_text_area() {
+        let editor_origin_x = 40.0;
+        let gutter_width = 64.0;
+        let pos = mouse_to_text_position(
+            125.0,
+            editor_origin_x + gutter_width,
+            120.0,
+            editor_origin_x,
+            gutter_width,
+            7.5,
+            22.0,
+            3,
+            test_line_lengths,
+        )
+        .unwrap();
+
+        assert_eq!(pos, TextPosition::new(0, 0));
+    }
 }
 
 fn section(title: &'static str, value: String) -> impl IntoElement {
