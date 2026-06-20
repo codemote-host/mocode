@@ -119,6 +119,55 @@ mod tests {
     }
 
     #[test]
+    fn daily_save_creates_backup_before_overwrite() {
+        let path = write_temp_yaml("backup-save", "mixed-port: 7890\n");
+        let backup_path = GpuiEditorDocument::backup_path_for(&path);
+        let mut document = app::initial_document_from_startup_path(Some(path.as_path()));
+
+        document.insert_text("# changed\n").unwrap();
+        document.save_to_original_path().unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&backup_path).unwrap(),
+            "mixed-port: 7890\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "# changed\nmixed-port: 7890\n"
+        );
+        assert!(!document.dirty);
+        assert!(document.save_status.contains("Backup"));
+
+        fs::remove_file(path).ok();
+        fs::remove_file(backup_path).ok();
+    }
+
+    #[test]
+    fn daily_save_as_updates_document_path_and_title() {
+        let path = unique_temp_yaml_path("save-as");
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "mixed-port: 7890\n",
+            TextPosition::new(0, 0),
+        );
+
+        document.insert_text("# saved as\n").unwrap();
+        document.save_as(&path).unwrap();
+
+        assert_eq!(document.path.as_deref(), Some(path.as_path()));
+        assert_eq!(document.title, file_name(&path));
+        assert_eq!(document.path_display, path.display().to_string());
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "# saved as\nmixed-port: 7890\n"
+        );
+        assert!(!document.dirty);
+        assert!(document.save_status.contains("Saved as"));
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
     fn saving_fixture_without_path_reports_unsaved_state() {
         let mut document = load_app_document();
 
@@ -403,6 +452,66 @@ mod tests {
 
         assert!(document.selected_text().is_none());
         assert_eq!(document.selection_summary, "<none>");
+    }
+
+    #[test]
+    fn daily_search_next_selects_match_and_wraps() {
+        let mut document = GpuiEditorDocument::from_text(
+            "search.yaml",
+            "alpha\nbeta alpha\n",
+            TextPosition::new(0, 0),
+        );
+
+        document.set_search_query("alpha");
+
+        assert!(document.find_next());
+        assert_eq!(document.cursor, TextPosition::new(0, 5));
+        assert_eq!(document.selected_text().unwrap(), "alpha");
+        assert_eq!(document.search_summary, "alpha - 1/2 at 1:1");
+
+        assert!(document.find_next());
+        assert_eq!(document.cursor, TextPosition::new(1, 10));
+        assert_eq!(document.selected_text().unwrap(), "alpha");
+        assert_eq!(document.search_summary, "alpha - 2/2 at 2:6");
+
+        assert!(document.find_next());
+        assert_eq!(document.cursor, TextPosition::new(0, 5));
+        assert_eq!(document.search_summary, "alpha - 1/2 at 1:1");
+    }
+
+    #[test]
+    fn daily_search_previous_wraps_from_first_match() {
+        let mut document = GpuiEditorDocument::from_text(
+            "search.yaml",
+            "alpha\nbeta alpha\n",
+            TextPosition::new(0, 0),
+        );
+
+        document.set_search_query("alpha");
+
+        assert!(document.find_previous());
+        assert_eq!(document.cursor, TextPosition::new(1, 10));
+        assert_eq!(document.selected_text().unwrap(), "alpha");
+        assert_eq!(document.search_summary, "alpha - 2/2 at 2:6");
+    }
+
+    #[test]
+    fn daily_search_query_can_start_from_selection() {
+        let mut document = GpuiEditorDocument::from_text(
+            "search.yaml",
+            "dns:\n  enhanced-mode: fake-ip\n",
+            TextPosition::new(1, 2),
+        );
+
+        for _ in 0..13 {
+            document.select_right().unwrap();
+        }
+
+        document.start_search_from_selection();
+
+        assert!(document.search_active);
+        assert_eq!(document.search_query, "enhanced-mode");
+        assert_eq!(document.search_summary, "enhanced-mode - 1/1 at 2:3");
     }
 
     #[test]

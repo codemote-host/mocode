@@ -8,7 +8,8 @@ use crate::{
 };
 use gpui::{
     App, Application, Bounds, Context, FocusHandle, Focusable, IntoElement, MouseButton,
-    MouseDownEvent, Render, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
+    MouseDownEvent, PathPromptOptions, Render, Window, WindowBounds, WindowOptions, div,
+    prelude::*, px, rgb, size,
 };
 
 pub(crate) fn run() {
@@ -69,6 +70,34 @@ impl MocodeApp {
             cx.notify();
         }
     }
+
+    fn suggested_save_name(&self) -> String {
+        self.editor
+            .document()
+            .path
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .map(str::to_string)
+            .or_else(|| {
+                Path::new(&self.editor.document().title)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "config.yaml".to_string())
+    }
+
+    fn suggested_save_directory(&self) -> PathBuf {
+        self.editor
+            .document()
+            .path
+            .as_ref()
+            .and_then(|path| path.parent())
+            .map(Path::to_path_buf)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
 }
 
 impl GpuiEditorHost for MocodeApp {
@@ -78,6 +107,91 @@ impl GpuiEditorHost for MocodeApp {
 
     fn editor_component_mut(&mut self) -> &mut GpuiEditorComponent {
         &mut self.editor
+    }
+
+    fn open_document(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.editor.document_mut().save_status = "Opening file...".to_string();
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Open YAML".into()),
+        });
+
+        cx.spawn(async move |this, cx| {
+            let result = receiver.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(Ok(Some(paths))) => {
+                        if let Some(path) = paths.into_iter().next() {
+                            match this.editor.open_path(&path) {
+                                Ok(()) => {
+                                    this.editor.document_mut().save_status =
+                                        format!("Opened {}", path.display());
+                                }
+                                Err(error) => {
+                                    this.editor.document_mut().save_status =
+                                        format!("Failed to open {}: {error}", path.display());
+                                }
+                            }
+                        }
+                    }
+                    Ok(Ok(None)) => {
+                        this.editor.document_mut().save_status = "Open canceled".to_string();
+                    }
+                    Ok(Err(error)) => {
+                        this.editor.document_mut().save_status =
+                            format!("Open dialog failed: {error}");
+                    }
+                    Err(error) => {
+                        this.editor.document_mut().save_status =
+                            format!("Open dialog canceled: {error}");
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn save_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor.document().path.is_none() {
+            self.save_document_as(window, cx);
+            return;
+        }
+
+        let _ = self.editor.document_mut().save_to_original_path();
+    }
+
+    fn save_document_as(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.editor.document_mut().save_status = "Choosing save path...".to_string();
+        let directory = self.suggested_save_directory();
+        let suggested_name = self.suggested_save_name();
+        let receiver = cx.prompt_for_new_path(&directory, Some(&suggested_name));
+
+        cx.spawn(async move |this, cx| {
+            let result = receiver.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(Ok(Some(path))) => {
+                        let _ = this.editor.document_mut().save_as(&path);
+                    }
+                    Ok(Ok(None)) => {
+                        this.editor.document_mut().save_status = "Save as canceled".to_string();
+                    }
+                    Ok(Err(error)) => {
+                        this.editor.document_mut().save_status =
+                            format!("Save dialog failed: {error}");
+                    }
+                    Err(error) => {
+                        this.editor.document_mut().save_status =
+                            format!("Save dialog canceled: {error}");
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 }
 
@@ -139,6 +253,7 @@ fn header(editor: &GpuiEditorComponent, cx: &mut Context<'_, MocodeApp>) -> impl
                     document.save_status
                 )),
         )
+        .child(command_buttons(cx))
         .child(fixture_selector(cx))
         .child(
             div()
@@ -147,12 +262,50 @@ fn header(editor: &GpuiEditorComponent, cx: &mut Context<'_, MocodeApp>) -> impl
         )
 }
 
+fn command_buttons(cx: &mut Context<'_, MocodeApp>) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .gap_1()
+        .child(command_button("Open", cx, |this, window, cx| {
+            this.open_document(window, cx);
+        }))
+        .child(command_button("Save", cx, |this, window, cx| {
+            this.save_document(window, cx);
+        }))
+        .child(command_button("Save As", cx, |this, window, cx| {
+            this.save_document_as(window, cx);
+        }))
+}
+
 fn fixture_selector(cx: &mut Context<'_, MocodeApp>) -> impl IntoElement {
     let mut selector = div().flex().flex_row().gap_1();
     for fixture in all_fixtures().iter() {
         selector = selector.child(fixture_button(fixture, cx));
     }
     selector
+}
+
+fn command_button(
+    label: &'static str,
+    cx: &mut Context<'_, MocodeApp>,
+    handler: fn(&mut MocodeApp, &mut Window, &mut Context<MocodeApp>),
+) -> impl IntoElement {
+    div()
+        .px_2()
+        .py_1()
+        .bg(rgb(0xeff6ff))
+        .border_1()
+        .border_color(rgb(0xbfdbfe))
+        .text_color(rgb(0x1d4ed8))
+        .text_size(px(11.0))
+        .child(label)
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _: &MouseDownEvent, window: &mut Window, cx| {
+                handler(this, window, cx);
+            }),
+        )
 }
 
 fn fixture_button(

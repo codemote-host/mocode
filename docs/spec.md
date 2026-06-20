@@ -26,6 +26,9 @@ Core scope:
 Application scope:
 
 - open/save YAML files
+- backup existing files before overwrite
+- save as YAML files
+- search and select matches
 - line numbers, cursor, selection, copy/paste, undo/redo baseline
 - syntax highlighting and diagnostics rendering
 - completion popup and hover popup
@@ -159,15 +162,17 @@ The `mocode` app must use `mocode-core` for all semantic behavior and meet this 
 3. Line numbers.
 4. Cursor movement, text selection, copy, and paste.
 5. Undo and redo.
-6. Save edited YAML.
-7. Chinese IME test.
-8. YAML syntax error rendering.
-9. Hover docs on Mihomo fields.
-10. Field-name completion.
-11. Completion in `proxy-groups.proxies`.
-12. Completion in `dialer-proxy`.
-13. Missing reference diagnostics.
-14. `dialer-proxy` cycle diagnostics.
-15. Right-side current YAML path panel.
-16. Right-side chain preview panel: local -> entry node -> intermediate node -> exit node -> target.
-17. No Mihomo business logic inside the app crate.
+6. Save edited YAML with a `.bak` backup when overwriting an existing file.
+7. Save as a new YAML path.
+8. Search selected text and navigate next/previous matches.
+9. Chinese IME test.
+10. YAML syntax error rendering.
+11. Hover docs on Mihomo fields.
+12. Field-name completion.
+13. Completion in `proxy-groups.proxies`.
+14. Completion in `dialer-proxy`.
+15. Missing reference diagnostics.
+16. `dialer-proxy` cycle diagnostics.
+17. Right-side current YAML path panel.
+18. Right-side chain preview panel: local -> entry node -> intermediate node -> exit node -> target.
+19. No Mihomo business logic inside the app crate.

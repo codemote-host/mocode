@@ -35,7 +35,15 @@ cargo build -p mocode
 target\debug\mocode.exe
 ```
 
-The `mocode` crate uses the shared `mocode-api` facade and keeps Mihomo semantics out of the UI layer. It currently supports the first editable loop: open a YAML file path from the command line, load built-in fixtures, show line numbers, move the cursor, select text, copy, paste, undo, redo, save, and refresh YAML path, completion, diagnostics, and proxy-chain panels from core state.
+Open a real config directly:
+
+```powershell
+target\debug\mocode.exe path\to\config.yaml
+```
+
+The `mocode` crate uses the shared `mocode-api` facade and keeps Mihomo semantics out of the UI layer. It currently supports a daily editing loop: open a YAML file from the command line or app button, load built-in fixtures, show line numbers, move the cursor, select text, copy, paste, undo, redo, save, save as, search, and refresh YAML path, completion, diagnostics, and proxy-chain panels from core state.
+
+When saving over an existing file, mocode writes a sibling backup named like `config.yaml.bak` before replacing the file. Built-in fixtures are not overwritten; saving them opens the save-as flow.
 
 `examples/configs/large.yaml` is a generated 5000+ line Mihomo sample. `examples/configs/large-20000.yaml` is the current 20000-line loading baseline used by core and app tests.
 

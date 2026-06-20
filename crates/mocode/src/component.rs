@@ -34,9 +34,16 @@ actions!(
         PageDown,
         Paste,
         Copy,
+        Open,
         Save,
+        SaveAs,
         Undo,
-        Redo
+        Redo,
+        Find,
+        FindNext,
+        FindPrevious,
+        EscapeSearch,
+        Enter
     ]
 );
 
@@ -97,6 +104,9 @@ pub(crate) struct GpuiEditorDocument {
     pub(crate) chain_preview: Option<ProxyChainPreview>,
     selection_anchor: Option<TextPosition>,
     pub(crate) selection_summary: String,
+    pub(crate) search_active: bool,
+    pub(crate) search_query: String,
+    pub(crate) search_summary: String,
 }
 
 impl GpuiEditorDocument {
@@ -161,6 +171,9 @@ impl GpuiEditorDocument {
             chain_preview: None,
             selection_anchor: None,
             selection_summary: String::new(),
+            search_active: false,
+            search_query: String::new(),
+            search_summary: "<none>".to_string(),
         };
         document.refresh_derived();
         document
@@ -345,15 +358,165 @@ impl GpuiEditorDocument {
             return Err(GpuiEditorSaveError::MissingPath);
         };
 
-        if let Err(error) = fs::write(&path, self.text()) {
-            let message = error.to_string();
-            self.save_status = format!("Failed to save {}: {message}", path.display());
-            return Err(GpuiEditorSaveError::Io { path, message });
+        self.save_to_path(&path, false)
+    }
+
+    pub(crate) fn save_as(&mut self, path: impl AsRef<Path>) -> Result<(), GpuiEditorSaveError> {
+        self.save_to_path(path.as_ref(), true)
+    }
+
+    pub(crate) fn backup_path_for(path: impl AsRef<Path>) -> PathBuf {
+        let path = path.as_ref();
+        match path.file_name().and_then(|name| name.to_str()) {
+            Some(file_name) => path.with_file_name(format!("{file_name}.bak")),
+            None => path.with_extension("bak"),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_search_query(&mut self, query: impl Into<String>) {
+        self.search_active = true;
+        self.search_query = query.into();
+        self.update_search_summary_without_match();
+    }
+
+    pub(crate) fn start_search_from_selection(&mut self) {
+        self.search_active = true;
+        if let Some(selected) = self.selected_text()
+            && !selected.is_empty()
+        {
+            self.search_query = selected;
         }
 
+        if self.search_query.is_empty() {
+            self.search_summary = "Type a search query".to_string();
+        } else {
+            self.find_next();
+        }
+    }
+
+    pub(crate) fn append_search_input(&mut self, text: &str) {
+        self.search_active = true;
+        self.search_query.push_str(text);
+        self.find_next();
+    }
+
+    pub(crate) fn search_backspace(&mut self) {
+        self.search_active = true;
+        self.search_query.pop();
+        if self.search_query.is_empty() {
+            self.clear_selection();
+            self.search_summary = "Type a search query".to_string();
+            self.refresh_derived();
+        } else {
+            self.find_next();
+        }
+    }
+
+    pub(crate) fn close_search(&mut self) {
+        self.search_active = false;
+        if self.search_query.is_empty() {
+            self.search_summary = "<none>".to_string();
+        }
+    }
+
+    pub(crate) fn find_next(&mut self) -> bool {
+        let Some(search_match) = find_next_match(
+            &self.text(),
+            &self.search_query,
+            self.cursor,
+            self.selected_range(),
+        ) else {
+            self.clear_selection();
+            self.update_search_summary_without_match();
+            self.refresh_derived();
+            return false;
+        };
+
+        self.apply_search_match(search_match);
+        true
+    }
+
+    pub(crate) fn find_previous(&mut self) -> bool {
+        let Some(search_match) = find_previous_match(
+            &self.text(),
+            &self.search_query,
+            self.cursor,
+            self.selected_range(),
+        ) else {
+            self.clear_selection();
+            self.update_search_summary_without_match();
+            self.refresh_derived();
+            return false;
+        };
+
+        self.apply_search_match(search_match);
+        true
+    }
+
+    fn save_to_path(&mut self, path: &Path, save_as: bool) -> Result<(), GpuiEditorSaveError> {
+        let backup_path = path.exists().then(|| Self::backup_path_for(path));
+        if let Some(backup_path) = &backup_path
+            && let Err(error) = fs::copy(path, backup_path)
+        {
+            let message = error.to_string();
+            self.save_status = format!("Failed to backup {}: {message}", path.display());
+            return Err(GpuiEditorSaveError::Io {
+                path: backup_path.clone(),
+                message,
+            });
+        }
+
+        if let Err(error) = fs::write(path, self.text()) {
+            let message = error.to_string();
+            self.save_status = format!("Failed to save {}: {message}", path.display());
+            return Err(GpuiEditorSaveError::Io {
+                path: path.to_path_buf(),
+                message,
+            });
+        }
+
+        self.path = Some(path.to_path_buf());
+        self.path_display = path.display().to_string();
+        self.title = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| path.display().to_string());
         self.dirty = false;
-        self.save_status = format!("Saved {}", path.display());
+        let verb = if save_as { "Saved as" } else { "Saved" };
+        self.save_status = if let Some(backup_path) = backup_path {
+            format!(
+                "{verb} {}; Backup {}",
+                path.display(),
+                backup_path.display()
+            )
+        } else {
+            format!("{verb} {}", path.display())
+        };
         Ok(())
+    }
+
+    fn apply_search_match(&mut self, search_match: SearchMatch) {
+        self.selection_anchor = Some(search_match.range.start);
+        self.cursor = search_match.range.end;
+        self.search_summary = format!(
+            "{} - {}/{} at {}:{}",
+            self.search_query,
+            search_match.ordinal,
+            search_match.total,
+            search_match.range.start.line + 1,
+            search_match.range.start.character + 1
+        );
+        self.refresh_derived();
+    }
+
+    fn update_search_summary_without_match(&mut self) {
+        self.search_summary = if self.search_query.is_empty() {
+            "Type a search query".to_string()
+        } else {
+            format!("{} - 0/0", self.search_query)
+        };
     }
 
     fn mark_dirty(&mut self) {
@@ -541,14 +704,52 @@ impl GpuiEditorComponent {
         self.document.copy_selection_text()
     }
 
-    fn save_to_original_path(&mut self) -> Result<(), GpuiEditorSaveError> {
-        self.document.save_to_original_path()
+    pub(crate) fn open_path(&mut self, path: impl AsRef<Path>) -> io::Result<()> {
+        self.document = GpuiEditorDocument::from_path(path)?;
+        Ok(())
+    }
+
+    fn start_search_from_selection(&mut self) {
+        self.document.start_search_from_selection();
+    }
+
+    fn append_search_input(&mut self, text: &str) {
+        self.document.append_search_input(text);
+    }
+
+    fn search_backspace(&mut self) {
+        self.document.search_backspace();
+    }
+
+    fn close_search(&mut self) {
+        self.document.close_search();
+    }
+
+    fn search_active(&self) -> bool {
+        self.document.search_active
+    }
+
+    fn find_next(&mut self) -> bool {
+        self.document.find_next()
+    }
+
+    fn find_previous(&mut self) -> bool {
+        self.document.find_previous()
     }
 }
 
 pub(crate) trait GpuiEditorHost {
     fn editor_component(&self) -> &GpuiEditorComponent;
     fn editor_component_mut(&mut self) -> &mut GpuiEditorComponent;
+    fn open_document(&mut self, window: &mut Window, cx: &mut Context<Self>)
+    where
+        Self: Sized;
+    fn save_document(&mut self, window: &mut Window, cx: &mut Context<Self>)
+    where
+        Self: Sized;
+    fn save_document_as(&mut self, window: &mut Window, cx: &mut Context<Self>)
+    where
+        Self: Sized;
 }
 
 pub(crate) fn bind_editor_keys(cx: &mut App) {
@@ -571,13 +772,26 @@ pub(crate) fn bind_editor_keys(cx: &mut App) {
         KeyBinding::new("ctrl-v", Paste, Some("MocodeEditor")),
         KeyBinding::new("cmd-c", Copy, Some("MocodeEditor")),
         KeyBinding::new("ctrl-c", Copy, Some("MocodeEditor")),
+        KeyBinding::new("cmd-o", Open, Some("MocodeEditor")),
+        KeyBinding::new("ctrl-o", Open, Some("MocodeEditor")),
         KeyBinding::new("cmd-s", Save, Some("MocodeEditor")),
         KeyBinding::new("ctrl-s", Save, Some("MocodeEditor")),
+        KeyBinding::new("cmd-shift-s", SaveAs, Some("MocodeEditor")),
+        KeyBinding::new("ctrl-shift-s", SaveAs, Some("MocodeEditor")),
         KeyBinding::new("cmd-z", Undo, Some("MocodeEditor")),
         KeyBinding::new("ctrl-z", Undo, Some("MocodeEditor")),
         KeyBinding::new("cmd-shift-z", Redo, Some("MocodeEditor")),
         KeyBinding::new("ctrl-shift-z", Redo, Some("MocodeEditor")),
         KeyBinding::new("ctrl-y", Redo, Some("MocodeEditor")),
+        KeyBinding::new("cmd-f", Find, Some("MocodeEditor")),
+        KeyBinding::new("ctrl-f", Find, Some("MocodeEditor")),
+        KeyBinding::new("cmd-g", FindNext, Some("MocodeEditor")),
+        KeyBinding::new("ctrl-g", FindNext, Some("MocodeEditor")),
+        KeyBinding::new("enter", Enter, Some("MocodeEditor")),
+        KeyBinding::new("shift-enter", FindPrevious, Some("MocodeEditor")),
+        KeyBinding::new("cmd-shift-g", FindPrevious, Some("MocodeEditor")),
+        KeyBinding::new("ctrl-shift-g", FindPrevious, Some("MocodeEditor")),
+        KeyBinding::new("escape", EscapeSearch, Some("MocodeEditor")),
     ]);
 }
 
@@ -592,6 +806,7 @@ where
         .flex()
         .flex_col()
         .h_full()
+        .child(search_panel(editor.document()))
         .child(completion_panel(editor.document()))
         .child(completion_popup_panel(editor.document()))
         .child(
@@ -618,7 +833,10 @@ where
         .key_context("MocodeEditor")
         .on_action(
             cx.listener(|this: &mut T, _: &Backspace, _: &mut Window, cx| {
-                if this.editor_component_mut().backspace().is_ok() {
+                if this.editor_component().search_active() {
+                    this.editor_component_mut().search_backspace();
+                    cx.notify();
+                } else if this.editor_component_mut().backspace().is_ok() {
                     cx.notify();
                 }
             }),
@@ -662,6 +880,54 @@ where
                 }
             }),
         )
+        .on_action(
+            cx.listener(|this: &mut T, _: &Open, window: &mut Window, cx| {
+                this.open_document(window, cx);
+                cx.notify();
+            }),
+        )
+        .on_action(
+            cx.listener(|this: &mut T, _: &Save, window: &mut Window, cx| {
+                this.save_document(window, cx);
+                cx.notify();
+            }),
+        )
+        .on_action(
+            cx.listener(|this: &mut T, _: &SaveAs, window: &mut Window, cx| {
+                this.save_document_as(window, cx);
+                cx.notify();
+            }),
+        )
+        .on_action(cx.listener(|this: &mut T, _: &Find, _: &mut Window, cx| {
+            this.editor_component_mut().start_search_from_selection();
+            cx.notify();
+        }))
+        .on_action(
+            cx.listener(|this: &mut T, _: &FindNext, _: &mut Window, cx| {
+                this.editor_component_mut().find_next();
+                cx.notify();
+            }),
+        )
+        .on_action(
+            cx.listener(|this: &mut T, _: &FindPrevious, _: &mut Window, cx| {
+                this.editor_component_mut().find_previous();
+                cx.notify();
+            }),
+        )
+        .on_action(
+            cx.listener(|this: &mut T, _: &EscapeSearch, _: &mut Window, cx| {
+                this.editor_component_mut().close_search();
+                cx.notify();
+            }),
+        )
+        .on_action(cx.listener(|this: &mut T, _: &Enter, _: &mut Window, cx| {
+            if this.editor_component().search_active() {
+                this.editor_component_mut().find_next();
+                cx.notify();
+            } else if this.editor_component_mut().insert_text("\n").is_ok() {
+                cx.notify();
+            }
+        }))
         .on_action(cx.listener(|this: &mut T, _: &Up, _: &mut Window, cx| {
             if this.editor_component_mut().move_up().is_ok() {
                 cx.notify();
@@ -720,10 +986,6 @@ where
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
             }
         }))
-        .on_action(cx.listener(|this: &mut T, _: &Save, _: &mut Window, cx| {
-            let _ = this.editor_component_mut().save_to_original_path();
-            cx.notify();
-        }))
         .on_key_down(
             cx.listener(|this: &mut T, event: &KeyDownEvent, _: &mut Window, cx| {
                 let modifiers = &event.keystroke.modifiers;
@@ -735,8 +997,15 @@ where
                     return;
                 };
 
-                if is_insertable_text(text) && this.editor_component_mut().insert_text(text).is_ok()
-                {
+                if !is_insertable_text(text) {
+                    return;
+                }
+
+                if this.editor_component().search_active() {
+                    this.editor_component_mut().append_search_input(text);
+                    cx.stop_propagation();
+                    cx.notify();
+                } else if this.editor_component_mut().insert_text(text).is_ok() {
                     cx.stop_propagation();
                     cx.notify();
                 }
@@ -824,6 +1093,42 @@ where
                 ),
             )
             .h_full(),
+        )
+}
+
+fn search_panel(document: &GpuiEditorDocument) -> impl IntoElement {
+    let query = if document.search_query.is_empty() {
+        "<none>".to_string()
+    } else {
+        document.search_query.clone()
+    };
+    let bg = if document.search_active {
+        rgb(0xfffbeb)
+    } else {
+        rgb(0xf8fafc)
+    };
+
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .px_4()
+        .py_2()
+        .bg(bg)
+        .border_b_1()
+        .border_color(rgb(0xd9e2ec))
+        .child(
+            div()
+                .w(px(88.0))
+                .text_color(rgb(0x64748b))
+                .text_size(px(11.0))
+                .child("Search"),
+        )
+        .child(
+            div()
+                .text_color(rgb(0x0f172a))
+                .child(format!("{query} | {}", document.search_summary)),
         )
 }
 
@@ -1375,6 +1680,127 @@ fn build_completion_popup(
         anchor_column: cursor.character + 1,
         items: completion_items.iter().take(6).cloned().collect(),
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SearchMatch {
+    range: TextRange,
+    ordinal: usize,
+    total: usize,
+}
+
+fn find_next_match(
+    text: &str,
+    query: &str,
+    cursor: TextPosition,
+    selected_range: Option<TextRange>,
+) -> Option<SearchMatch> {
+    if query.is_empty() {
+        return None;
+    }
+
+    let matches = match_start_indices(text, query);
+    if matches.is_empty() {
+        return None;
+    }
+
+    let start_byte = selected_range
+        .map(|range| byte_index_at_position(text, range.end.max(range.start)))
+        .unwrap_or_else(|| byte_index_at_position(text, cursor));
+    let index = matches
+        .iter()
+        .position(|match_start| *match_start >= start_byte)
+        .unwrap_or(0);
+    build_search_match(text, query, matches[index], index + 1, matches.len())
+}
+
+fn find_previous_match(
+    text: &str,
+    query: &str,
+    cursor: TextPosition,
+    selected_range: Option<TextRange>,
+) -> Option<SearchMatch> {
+    if query.is_empty() {
+        return None;
+    }
+
+    let matches = match_start_indices(text, query);
+    if matches.is_empty() {
+        return None;
+    }
+
+    let start_byte = selected_range
+        .map(|range| byte_index_at_position(text, range.start.min(range.end)))
+        .unwrap_or_else(|| byte_index_at_position(text, cursor));
+    let index = matches
+        .iter()
+        .rposition(|match_start| *match_start < start_byte)
+        .unwrap_or(matches.len() - 1);
+    build_search_match(text, query, matches[index], index + 1, matches.len())
+}
+
+fn match_start_indices(text: &str, query: &str) -> Vec<usize> {
+    text.match_indices(query)
+        .map(|(byte_index, _)| byte_index)
+        .collect()
+}
+
+fn build_search_match(
+    text: &str,
+    query: &str,
+    start_byte: usize,
+    ordinal: usize,
+    total: usize,
+) -> Option<SearchMatch> {
+    let end_byte = start_byte.checked_add(query.len())?;
+    Some(SearchMatch {
+        range: TextRange::new(
+            text_position_at_byte_index(text, start_byte),
+            text_position_at_byte_index(text, end_byte),
+        ),
+        ordinal,
+        total,
+    })
+}
+
+fn byte_index_at_position(text: &str, position: TextPosition) -> usize {
+    let mut line = 0;
+    let mut character = 0;
+
+    for (byte_index, ch) in text.char_indices() {
+        if line == position.line && character == position.character {
+            return byte_index;
+        }
+
+        if ch == '\n' {
+            line += 1;
+            character = 0;
+        } else {
+            character += 1;
+        }
+    }
+
+    text.len()
+}
+
+fn text_position_at_byte_index(text: &str, target_byte_index: usize) -> TextPosition {
+    let mut line = 0;
+    let mut character = 0;
+
+    for (byte_index, ch) in text.char_indices() {
+        if byte_index >= target_byte_index {
+            break;
+        }
+
+        if ch == '\n' {
+            line += 1;
+            character = 0;
+        } else {
+            character += 1;
+        }
+    }
+
+    TextPosition::new(line, character)
 }
 
 fn format_selection_range(range: TextRange) -> String {

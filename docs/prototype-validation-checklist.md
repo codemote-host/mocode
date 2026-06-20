@@ -85,13 +85,40 @@ Record:
 - Whether paste inserts clipboard text.
 - Whether undo and redo work.
 - Whether save writes the current file path.
+- Whether saving an existing file creates a sibling `.bak` backup before overwrite.
+- Whether save-as writes a new YAML file and updates the app path.
+- Whether the Open button can load another YAML file.
+- Whether search can be started from selected text and move to next/previous matches.
 - Whether diagnostics update after editing invalid YAML.
 - Whether the completion strip updates when the cursor changes.
 - Whether the completion popup anchor changes when the cursor changes.
 - Whether the inspector shows current YAML path, selection summary, hover summary, diagnostics, and chain preview.
 - Whether focus returns to the editor after interacting with visible panels and fixture selector buttons.
 
-Use the fixture selector to switch to `Large`, `20k`, `Bad YAML`, `Bad Ref`, and `Cycle`. The selector is intentionally limited to built-in fixtures; it is not a general file-open UI.
+Use the fixture selector to switch to `Large`, `20k`, `Bad YAML`, `Bad Ref`, and `Cycle`. Use the Open button or command-line argument for real YAML files.
+
+## Daily File Workflow Script
+
+1. Copy a real Mihomo config to a temporary path.
+2. Launch `target\debug\mocode.exe path\to\copy.yaml`.
+3. Edit a harmless scalar or comment.
+4. Save.
+5. Verify `copy.yaml.bak` contains the pre-save content.
+6. Verify `copy.yaml` contains the edited content.
+7. Use Save As to write a second YAML file.
+8. Close and relaunch with the saved file path.
+9. Confirm diagnostics and YAML path still render.
+
+Do not run this script directly on the only copy of a production config.
+
+## Search Script
+
+1. Select a known token such as a proxy name.
+2. Start search from the selection.
+3. Move to the next match.
+4. Move to the previous match.
+5. Verify the search panel shows the query, ordinal, total match count, and match location.
+6. Verify the current match is selected in the editor surface.
 
 ## Windows Chinese IME Script
 
