@@ -239,12 +239,7 @@ impl EntityInputHandler for MocodeApp {
             return;
         }
 
-        if self
-            .editor
-            .document_mut()
-            .replace_utf16_range(range, text)
-            .is_ok()
-        {
+        if self.editor.replace_utf16_range(range, text).is_ok() {
             cx.notify();
         }
     }
@@ -265,7 +260,6 @@ impl EntityInputHandler for MocodeApp {
 
         if self
             .editor
-            .document_mut()
             .replace_and_mark_utf16_range(range, new_text, new_selected_range)
             .is_ok()
         {

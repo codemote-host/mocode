@@ -14,13 +14,24 @@ use mocode_api::{
 use gpui::{
     App, Bounds, ClipboardItem, Context, ElementInputHandler, EntityInputHandler, FocusHandle,
     IntoElement, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, Window, actions, canvas, div, point, prelude::*, px, rgb, uniform_list,
+    Point, ScrollStrategy, UniformListScrollHandle, Window, actions, canvas, div, point,
+    prelude::*, px, rgb, uniform_list,
 };
 
 const LINE_HEIGHT_PX: f32 = 22.0;
 const GUTTER_WIDTH_PX: f32 = 64.0;
 const CHAR_WIDTH_PX: f32 = 7.5;
 const TAB_WIDTH: &str = "  ";
+
+fn reveal_line(scroll_handle: &UniformListScrollHandle, line_count: usize, line: u32) {
+    if line_count == 0 {
+        scroll_handle.0.borrow_mut().deferred_scroll_to_item = None;
+        return;
+    }
+
+    let item_index = (line as usize).min(line_count - 1);
+    scroll_handle.scroll_to_item(item_index, ScrollStrategy::Center);
+}
 
 actions!(
     mocode_editor,
@@ -850,6 +861,7 @@ impl GpuiEditorDocument {
 pub(crate) struct GpuiEditorComponent {
     document: GpuiEditorDocument,
     focus_handle: FocusHandle,
+    scroll_handle: UniformListScrollHandle,
     line_list_bounds: Rc<RefCell<Option<Bounds<Pixels>>>>,
     mouse_selecting: bool,
 }
@@ -859,6 +871,7 @@ impl GpuiEditorComponent {
         Self {
             document,
             focus_handle,
+            scroll_handle: UniformListScrollHandle::new(),
             line_list_bounds: Rc::new(RefCell::new(None)),
             mouse_selecting: false,
         }
@@ -884,9 +897,29 @@ impl GpuiEditorComponent {
         *self.line_list_bounds.borrow()
     }
 
+    fn scroll_handle(&self) -> UniformListScrollHandle {
+        self.scroll_handle.clone()
+    }
+
+    fn reveal_cursor(&self) {
+        reveal_line(
+            &self.scroll_handle,
+            self.document.line_count,
+            self.document.cursor.line,
+        );
+    }
+
+    fn reveal_if_ok(&self, result: Result<(), EditorError>) -> Result<(), EditorError> {
+        if result.is_ok() {
+            self.reveal_cursor();
+        }
+        result
+    }
+
     fn begin_mouse_selection(&mut self, position: TextPosition) {
         self.mouse_selecting = true;
         self.document.begin_selection_at(position);
+        self.reveal_cursor();
     }
 
     fn update_mouse_selection(&mut self, position: TextPosition) -> bool {
@@ -895,6 +928,7 @@ impl GpuiEditorComponent {
         }
 
         self.document.select_to(position);
+        self.reveal_cursor();
         true
     }
 
@@ -909,79 +943,119 @@ impl GpuiEditorComponent {
     }
 
     fn insert_text(&mut self, text: &str) -> Result<(), EditorError> {
-        self.document.insert_text(text)
+        let result = self.document.insert_text(text);
+        self.reveal_if_ok(result)
     }
 
     fn insert_tab(&mut self) -> Result<(), EditorError> {
-        self.document.insert_tab()
+        let result = self.document.insert_tab();
+        self.reveal_if_ok(result)
     }
 
     fn outdent_current_line(&mut self) -> Result<(), EditorError> {
-        self.document.outdent_current_line()
+        let result = self.document.outdent_current_line();
+        self.reveal_if_ok(result)
     }
 
     fn backspace(&mut self) -> Result<(), EditorError> {
-        self.document.backspace()
+        let result = self.document.backspace();
+        self.reveal_if_ok(result)
     }
 
     fn delete(&mut self) -> Result<(), EditorError> {
-        self.document.delete()
+        let result = self.document.delete();
+        self.reveal_if_ok(result)
     }
 
     fn undo(&mut self) -> Result<(), EditorError> {
-        self.document.undo()
+        let result = self.document.undo();
+        self.reveal_if_ok(result)
     }
 
     fn redo(&mut self) -> Result<(), EditorError> {
-        self.document.redo()
+        let result = self.document.redo();
+        self.reveal_if_ok(result)
     }
 
     fn move_left(&mut self) -> Result<(), EditorError> {
-        self.document.move_left()
+        let result = self.document.move_left();
+        self.reveal_if_ok(result)
     }
 
     fn move_right(&mut self) -> Result<(), EditorError> {
-        self.document.move_right()
+        let result = self.document.move_right();
+        self.reveal_if_ok(result)
     }
 
     fn select_left(&mut self) -> Result<(), EditorError> {
-        self.document.select_left()
+        let result = self.document.select_left();
+        self.reveal_if_ok(result)
     }
 
     fn select_right(&mut self) -> Result<(), EditorError> {
-        self.document.select_right()
+        let result = self.document.select_right();
+        self.reveal_if_ok(result)
     }
 
     fn move_up(&mut self) -> Result<(), EditorError> {
-        self.document.move_up()
+        let result = self.document.move_up();
+        self.reveal_if_ok(result)
     }
 
     fn move_down(&mut self) -> Result<(), EditorError> {
-        self.document.move_down()
+        let result = self.document.move_down();
+        self.reveal_if_ok(result)
     }
 
     fn move_line_start(&mut self) -> Result<(), EditorError> {
-        self.document.move_line_start()
+        let result = self.document.move_line_start();
+        self.reveal_if_ok(result)
     }
 
     fn move_line_end(&mut self) -> Result<(), EditorError> {
-        self.document.move_line_end()
+        let result = self.document.move_line_end();
+        self.reveal_if_ok(result)
     }
 
     fn page_up(&mut self) -> Result<(), EditorError> {
-        self.document.page_up()
+        let result = self.document.page_up();
+        self.reveal_if_ok(result)
     }
 
     fn page_down(&mut self) -> Result<(), EditorError> {
-        self.document.page_down()
+        let result = self.document.page_down();
+        self.reveal_if_ok(result)
     }
 
     fn select_up(&mut self) -> Result<(), EditorError> {
-        self.document.select_up()
+        let result = self.document.select_up();
+        self.reveal_if_ok(result)
     }
 
     fn select_down(&mut self) -> Result<(), EditorError> {
-        self.document.select_down()
+        let result = self.document.select_down();
+        self.reveal_if_ok(result)
+    }
+
+    pub(crate) fn replace_utf16_range(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        text: &str,
+    ) -> Result<(), EditorError> {
+        let result = self.document.replace_utf16_range(range_utf16, text);
+        self.reveal_if_ok(result)
+    }
+
+    pub(crate) fn replace_and_mark_utf16_range(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        text: &str,
+        selected_range_utf16: Option<Range<usize>>,
+    ) -> Result<(), EditorError> {
+        let result =
+            self.document
+                .replace_and_mark_utf16_range(range_utf16, text, selected_range_utf16);
+        self.reveal_if_ok(result)
     }
 
     fn copy_selection_text(&self) -> Option<String> {
@@ -990,6 +1064,7 @@ impl GpuiEditorComponent {
 
     pub(crate) fn open_path(&mut self, path: impl AsRef<Path>) -> io::Result<()> {
         self.document = GpuiEditorDocument::from_path(path)?;
+        self.reveal_cursor();
         Ok(())
     }
 
@@ -1010,11 +1085,19 @@ impl GpuiEditorComponent {
     }
 
     fn find_next(&mut self) -> bool {
-        self.document.find_next()
+        let found = self.document.find_next();
+        if found {
+            self.reveal_cursor();
+        }
+        found
     }
 
     fn find_previous(&mut self) -> bool {
-        self.document.find_previous()
+        let found = self.document.find_previous();
+        if found {
+            self.reveal_cursor();
+        }
+        found
     }
 }
 
@@ -1103,6 +1186,7 @@ where
 {
     let line_count = editor.document().line_count;
     let line_list_bounds = editor.line_list_bounds_handle();
+    let scroll_handle = editor.scroll_handle();
     let focus_handle = editor.focus_handle().clone();
     let entity = cx.entity();
     let input_focus_handle = focus_handle.clone();
@@ -1366,6 +1450,7 @@ where
                     },
                 ),
             )
+            .track_scroll(scroll_handle)
             .h_full(),
         )
         .child(
@@ -1632,6 +1717,52 @@ fn mouse_to_text_position(
     };
     let character = character.min(get_line_length(line));
     Some(TextPosition::new(line, character))
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::*;
+
+    #[test]
+    fn reveal_line_requests_center_scroll_to_cursor_line() {
+        let handle = UniformListScrollHandle::new();
+
+        reveal_line(&handle, 100, 42);
+
+        let request = handle
+            .0
+            .borrow()
+            .deferred_scroll_to_item
+            .expect("cursor reveal should request a scroll target");
+        assert_eq!(request.item_index, 42);
+        assert_eq!(request.strategy, ScrollStrategy::Center);
+        assert_eq!(request.offset, 0);
+        assert!(!request.scroll_strict);
+    }
+
+    #[test]
+    fn reveal_line_clamps_past_end_to_last_line() {
+        let handle = UniformListScrollHandle::new();
+
+        reveal_line(&handle, 3, 99);
+
+        let request = handle
+            .0
+            .borrow()
+            .deferred_scroll_to_item
+            .expect("cursor reveal should request a scroll target");
+        assert_eq!(request.item_index, 2);
+    }
+
+    #[test]
+    fn reveal_line_clears_request_for_empty_documents() {
+        let handle = UniformListScrollHandle::new();
+        handle.scroll_to_item(5, ScrollStrategy::Center);
+
+        reveal_line(&handle, 0, 5);
+
+        assert!(handle.0.borrow().deferred_scroll_to_item.is_none());
+    }
 }
 
 #[cfg(test)]

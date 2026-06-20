@@ -600,6 +600,15 @@ mod tests {
     }
 
     #[test]
+    fn editor_surface_tracks_cursor_reveal_scroll_handle() {
+        let component_source = include_str!("component.rs");
+
+        assert!(component_source.contains("UniformListScrollHandle"));
+        assert!(component_source.contains("reveal_cursor"));
+        assert!(component_source.contains(".track_scroll(scroll_handle)"));
+    }
+
+    #[test]
     fn document_text_returns_current_core_text() {
         let mut document = GpuiEditorDocument::from_text(
             "scratch.yaml",
