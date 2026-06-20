@@ -271,6 +271,38 @@ impl MocodeEditor {
         Ok(self.text.move_right(position)?)
     }
 
+    pub fn move_up(&self, position: TextPosition) -> Result<TextPosition, EditorError> {
+        Ok(self.text.move_up(position)?)
+    }
+
+    pub fn move_down(&self, position: TextPosition) -> Result<TextPosition, EditorError> {
+        Ok(self.text.move_down(position)?)
+    }
+
+    pub fn move_line_start(&self, position: TextPosition) -> Result<TextPosition, EditorError> {
+        Ok(self.text.move_line_start(position)?)
+    }
+
+    pub fn move_line_end(&self, position: TextPosition) -> Result<TextPosition, EditorError> {
+        Ok(self.text.move_line_end(position)?)
+    }
+
+    pub fn page_up(
+        &self,
+        position: TextPosition,
+        visible_lines: u32,
+    ) -> Result<TextPosition, EditorError> {
+        Ok(self.text.page_up(position, visible_lines)?)
+    }
+
+    pub fn page_down(
+        &self,
+        position: TextPosition,
+        visible_lines: u32,
+    ) -> Result<TextPosition, EditorError> {
+        Ok(self.text.page_down(position, visible_lines)?)
+    }
+
     pub fn snapshot(&self) -> EditorSnapshot {
         EditorSnapshot {
             lines: (0..self.line_count())
@@ -779,6 +811,40 @@ mod tests {
                 ))
                 .unwrap(),
             "pha\nbeta\nga"
+        );
+    }
+
+    #[test]
+    fn vertical_navigation_delegates_to_text_buffer() {
+        let editor = MocodeEditor::open_text("short\nvery long line here\n");
+
+        // move_up with column clamp
+        assert_eq!(
+            editor.move_up(TextPosition::new(1, 10)).unwrap(),
+            TextPosition::new(0, 5) // "short" is 5 chars
+        );
+        // move_down preserves column
+        assert_eq!(
+            editor.move_down(TextPosition::new(0, 3)).unwrap(),
+            TextPosition::new(1, 3)
+        );
+        // home / end
+        assert_eq!(
+            editor.move_line_start(TextPosition::new(1, 8)).unwrap(),
+            TextPosition::new(1, 0)
+        );
+        assert_eq!(
+            editor.move_line_end(TextPosition::new(0, 1)).unwrap(),
+            TextPosition::new(0, 5)
+        );
+        // page
+        assert_eq!(
+            editor.page_up(TextPosition::new(1, 0), 1).unwrap(),
+            TextPosition::new(0, 0)
+        );
+        assert_eq!(
+            editor.page_down(TextPosition::new(0, 0), 1).unwrap(),
+            TextPosition::new(1, 0)
         );
     }
 

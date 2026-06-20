@@ -22,6 +22,14 @@ actions!(
         Right,
         SelectLeft,
         SelectRight,
+        Up,
+        Down,
+        SelectUp,
+        SelectDown,
+        Home,
+        End,
+        PageUp,
+        PageDown,
         Paste,
         Copy,
         Save
@@ -206,6 +214,64 @@ impl GpuiEditorDocument {
         Ok(())
     }
 
+    pub(crate) const PAGE_LINES: u32 = 25;
+
+    pub(crate) fn move_up(&mut self) -> Result<(), EditorError> {
+        self.cursor = self.editor.move_up(self.cursor)?;
+        self.clear_selection();
+        self.refresh_derived();
+        Ok(())
+    }
+
+    pub(crate) fn move_down(&mut self) -> Result<(), EditorError> {
+        self.cursor = self.editor.move_down(self.cursor)?;
+        self.clear_selection();
+        self.refresh_derived();
+        Ok(())
+    }
+
+    pub(crate) fn move_line_start(&mut self) -> Result<(), EditorError> {
+        self.cursor = self.editor.move_line_start(self.cursor)?;
+        self.clear_selection();
+        self.refresh_derived();
+        Ok(())
+    }
+
+    pub(crate) fn move_line_end(&mut self) -> Result<(), EditorError> {
+        self.cursor = self.editor.move_line_end(self.cursor)?;
+        self.clear_selection();
+        self.refresh_derived();
+        Ok(())
+    }
+
+    pub(crate) fn page_up(&mut self) -> Result<(), EditorError> {
+        self.cursor = self.editor.page_up(self.cursor, Self::PAGE_LINES)?;
+        self.clear_selection();
+        self.refresh_derived();
+        Ok(())
+    }
+
+    pub(crate) fn page_down(&mut self) -> Result<(), EditorError> {
+        self.cursor = self.editor.page_down(self.cursor, Self::PAGE_LINES)?;
+        self.clear_selection();
+        self.refresh_derived();
+        Ok(())
+    }
+
+    pub(crate) fn select_up(&mut self) -> Result<(), EditorError> {
+        self.ensure_selection_anchor();
+        self.cursor = self.editor.move_up(self.cursor)?;
+        self.refresh_derived();
+        Ok(())
+    }
+
+    pub(crate) fn select_down(&mut self) -> Result<(), EditorError> {
+        self.ensure_selection_anchor();
+        self.cursor = self.editor.move_down(self.cursor)?;
+        self.refresh_derived();
+        Ok(())
+    }
+
     pub(crate) fn selected_text(&self) -> Option<String> {
         let range = self.selected_range()?;
         self.editor.text_in_range(range).ok()
@@ -329,7 +395,7 @@ impl GpuiEditorDocument {
         self.selection_anchor = None;
     }
 
-    fn selected_range(&self) -> Option<TextRange> {
+    pub(crate) fn selected_range(&self) -> Option<TextRange> {
         let anchor = self.selection_anchor?;
         (anchor != self.cursor).then(|| TextRange::new(anchor, self.cursor))
     }
@@ -350,6 +416,10 @@ impl GpuiEditorComponent {
 
     pub(crate) fn document(&self) -> &GpuiEditorDocument {
         &self.document
+    }
+
+    pub(crate) fn document_mut(&mut self) -> &mut GpuiEditorDocument {
+        &mut self.document
     }
 
     pub(crate) fn replace_document(&mut self, document: GpuiEditorDocument) {
@@ -392,6 +462,38 @@ impl GpuiEditorComponent {
         self.document.select_right()
     }
 
+    fn move_up(&mut self) -> Result<(), EditorError> {
+        self.document.move_up()
+    }
+
+    fn move_down(&mut self) -> Result<(), EditorError> {
+        self.document.move_down()
+    }
+
+    fn move_line_start(&mut self) -> Result<(), EditorError> {
+        self.document.move_line_start()
+    }
+
+    fn move_line_end(&mut self) -> Result<(), EditorError> {
+        self.document.move_line_end()
+    }
+
+    fn page_up(&mut self) -> Result<(), EditorError> {
+        self.document.page_up()
+    }
+
+    fn page_down(&mut self) -> Result<(), EditorError> {
+        self.document.page_down()
+    }
+
+    fn select_up(&mut self) -> Result<(), EditorError> {
+        self.document.select_up()
+    }
+
+    fn select_down(&mut self) -> Result<(), EditorError> {
+        self.document.select_down()
+    }
+
     fn copy_selection_text(&self) -> Option<String> {
         self.document.copy_selection_text()
     }
@@ -414,6 +516,14 @@ pub(crate) fn bind_editor_keys(cx: &mut App) {
         KeyBinding::new("right", Right, Some("MocodeEditor")),
         KeyBinding::new("shift-left", SelectLeft, Some("MocodeEditor")),
         KeyBinding::new("shift-right", SelectRight, Some("MocodeEditor")),
+        KeyBinding::new("up", Up, Some("MocodeEditor")),
+        KeyBinding::new("down", Down, Some("MocodeEditor")),
+        KeyBinding::new("shift-up", SelectUp, Some("MocodeEditor")),
+        KeyBinding::new("shift-down", SelectDown, Some("MocodeEditor")),
+        KeyBinding::new("home", Home, Some("MocodeEditor")),
+        KeyBinding::new("end", End, Some("MocodeEditor")),
+        KeyBinding::new("pageup", PageUp, Some("MocodeEditor")),
+        KeyBinding::new("pagedown", PageDown, Some("MocodeEditor")),
         KeyBinding::new("cmd-v", Paste, Some("MocodeEditor")),
         KeyBinding::new("ctrl-v", Paste, Some("MocodeEditor")),
         KeyBinding::new("cmd-c", Copy, Some("MocodeEditor")),
@@ -493,6 +603,52 @@ where
                 }
             }),
         )
+        .on_action(cx.listener(|this: &mut T, _: &Up, _: &mut Window, cx| {
+            if this.editor_component_mut().move_up().is_ok() {
+                cx.notify();
+            }
+        }))
+        .on_action(cx.listener(|this: &mut T, _: &Down, _: &mut Window, cx| {
+            if this.editor_component_mut().move_down().is_ok() {
+                cx.notify();
+            }
+        }))
+        .on_action(cx.listener(|this: &mut T, _: &Home, _: &mut Window, cx| {
+            if this.editor_component_mut().move_line_start().is_ok() {
+                cx.notify();
+            }
+        }))
+        .on_action(cx.listener(|this: &mut T, _: &End, _: &mut Window, cx| {
+            if this.editor_component_mut().move_line_end().is_ok() {
+                cx.notify();
+            }
+        }))
+        .on_action(cx.listener(|this: &mut T, _: &PageUp, _: &mut Window, cx| {
+            if this.editor_component_mut().page_up().is_ok() {
+                cx.notify();
+            }
+        }))
+        .on_action(
+            cx.listener(|this: &mut T, _: &PageDown, _: &mut Window, cx| {
+                if this.editor_component_mut().page_down().is_ok() {
+                    cx.notify();
+                }
+            }),
+        )
+        .on_action(
+            cx.listener(|this: &mut T, _: &SelectUp, _: &mut Window, cx| {
+                if this.editor_component_mut().select_up().is_ok() {
+                    cx.notify();
+                }
+            }),
+        )
+        .on_action(
+            cx.listener(|this: &mut T, _: &SelectDown, _: &mut Window, cx| {
+                if this.editor_component_mut().select_down().is_ok() {
+                    cx.notify();
+                }
+            }),
+        )
         .on_action(cx.listener(|this: &mut T, _: &Paste, _: &mut Window, cx| {
             if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text())
                 && this.editor_component_mut().insert_text(&text).is_ok()
@@ -530,8 +686,40 @@ where
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(
-                |this: &mut T, _: &MouseDownEvent, window: &mut Window, _: &mut Context<T>| {
-                    this.editor_component().focus(window);
+                |this: &mut T, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<T>| {
+                    const LINE_HEIGHT: f32 = 22.0;
+                    const GUTTER_WIDTH: f32 = 64.0;
+                    const CHAR_WIDTH: f32 = 7.5; // approximate monospace character width
+
+                    let focus_handle = this.editor_component().focus_handle().clone();
+                    focus_handle.focus(window);
+
+                    let y: f32 = event.position.y.into();
+                    let x: f32 = event.position.x.into();
+                    let text_x = x - GUTTER_WIDTH;
+
+                    if text_x >= 0.0 && y >= 0.0 {
+                        let document = this.editor_component().document();
+                        let max_line = document.line_count.saturating_sub(1) as u32;
+                        let line = ((y / LINE_HEIGHT) as u32).min(max_line);
+                        let character = if text_x > 0.0 {
+                            (text_x / CHAR_WIDTH) as u32
+                        } else {
+                            0
+                        };
+                        let character = character.min(
+                            document
+                                .editor
+                                .line_end_position(line as usize)
+                                .map(|pos| pos.character)
+                                .unwrap_or(0),
+                        );
+                        let doc = this.editor_component_mut().document_mut();
+                        doc.cursor = TextPosition::new(line, character);
+                        doc.clear_selection();
+                        doc.refresh_derived();
+                        cx.notify();
+                    }
                 },
             ),
         )
@@ -543,11 +731,16 @@ where
                     |this: &mut T, range: std::ops::Range<usize>, _window, _cx| {
                         let document = this.editor_component().document();
                         let slice = document.lines_in_range(range.start, range.end);
+                        let selection_range = document.selected_range();
                         let mut rows = Vec::new();
                         for (offset, line) in slice.into_iter().enumerate() {
                             let index = range.start + offset;
+                            let index_u32 = index as u32;
                             let cursor = (document.cursor.line as usize == index)
                                 .then_some(document.cursor.character);
+                            let line_selection = selection_range.and_then(|r| {
+                                selection_on_line(index_u32, line.text.chars().count() as u32, r)
+                            });
                             rows.push(line_row(
                                 index,
                                 line.number,
@@ -555,6 +748,7 @@ where
                                 line.diagnostic_count,
                                 line.diagnostic_severity,
                                 cursor,
+                                line_selection,
                             ));
                         }
                         rows
@@ -750,10 +944,8 @@ fn line_row(
     diagnostic_count: usize,
     diagnostic_severity: Option<String>,
     cursor: Option<u32>,
+    selection: Option<(u32, u32)>,
 ) -> impl IntoElement {
-    let (before_cursor, after_cursor) = cursor
-        .map(|character| split_at_character(&text, character))
-        .unwrap_or_else(|| (text, String::new()));
     let marker_color = diagnostic_severity
         .as_deref()
         .map(severity_color)
@@ -781,23 +973,72 @@ fn line_row(
                     format!("{number:>3}!")
                 })),
         )
-        .child(
-            div()
-                .w(px(756.0))
-                .px_3()
-                .flex()
-                .flex_row()
-                .items_center()
-                .text_color(rgb(0x0f172a))
-                .whitespace_nowrap()
-                .overflow_hidden()
-                .text_ellipsis()
-                .child(before_cursor)
-                .when(cursor.is_some(), |this| {
-                    this.child(div().w(px(1.0)).h(px(16.0)).bg(rgb(0x2563eb)))
-                })
-                .child(after_cursor),
-        )
+        .child(render_line_text(text, cursor, selection))
+}
+
+fn render_line_text(
+    text: String,
+    cursor: Option<u32>,
+    selection: Option<(u32, u32)>,
+) -> impl IntoElement {
+    if let Some((sel_start, sel_end)) = selection {
+        let sel_start_byte = char_to_byte_index(&text, sel_start);
+        let sel_end_byte = char_to_byte_index(&text, sel_end);
+
+        let before = text[..sel_start_byte].to_string();
+        let highlighted = text[sel_start_byte..sel_end_byte].to_string();
+        let after = text[sel_end_byte..].to_string();
+
+        let cursor_at_start = cursor == Some(sel_start);
+        let cursor_at_end = cursor == Some(sel_end);
+
+        div()
+            .w(px(756.0))
+            .px_3()
+            .flex()
+            .flex_row()
+            .items_center()
+            .text_color(rgb(0x0f172a))
+            .whitespace_nowrap()
+            .overflow_hidden()
+            .text_ellipsis()
+            .child(before)
+            .when(cursor_at_start, |this| {
+                this.child(div().w(px(1.0)).h(px(16.0)).bg(rgb(0x2563eb)))
+            })
+            .child(div().bg(rgb(0xdbeafe)).child(highlighted))
+            .when(cursor_at_end, |this| {
+                this.child(div().w(px(1.0)).h(px(16.0)).bg(rgb(0x2563eb)))
+            })
+            .child(after)
+    } else {
+        let (before_cursor, after_cursor) = cursor
+            .map(|c| split_at_character(&text, c))
+            .unwrap_or_else(|| (text, String::new()));
+
+        div()
+            .w(px(756.0))
+            .px_3()
+            .flex()
+            .flex_row()
+            .items_center()
+            .text_color(rgb(0x0f172a))
+            .whitespace_nowrap()
+            .overflow_hidden()
+            .text_ellipsis()
+            .child(before_cursor)
+            .when(cursor.is_some(), |this| {
+                this.child(div().w(px(1.0)).h(px(16.0)).bg(rgb(0x2563eb)))
+            })
+            .child(after_cursor)
+    }
+}
+
+fn char_to_byte_index(text: &str, char_index: u32) -> usize {
+    text.char_indices()
+        .nth(char_index as usize)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len())
 }
 
 fn section(title: &'static str, value: String) -> impl IntoElement {
@@ -934,6 +1175,35 @@ fn severity_color(severity: &str) -> gpui::Hsla {
         "warning" => rgb(0xa16207).into(),
         _ => rgb(0x2563eb).into(),
     }
+}
+
+/// Compute the character range of a selection on a given line.
+/// Returns `None` when the selection does not overlap `line_index`,
+/// or when the overlap is empty (e.g. collapsed selection on empty line).
+fn selection_on_line(line_index: u32, line_length: u32, range: TextRange) -> Option<(u32, u32)> {
+    let start = range.start.min(range.end);
+    let end = range.start.max(range.end);
+
+    if line_index < start.line || line_index > end.line {
+        return None;
+    }
+
+    let sel_start = if line_index == start.line {
+        start.character
+    } else {
+        0
+    };
+    let sel_end = if line_index == end.line {
+        end.character
+    } else {
+        line_length
+    };
+
+    if sel_start >= sel_end {
+        return None;
+    }
+
+    Some((sel_start, sel_end))
 }
 
 fn split_at_character(text: &str, character: u32) -> (String, String) {

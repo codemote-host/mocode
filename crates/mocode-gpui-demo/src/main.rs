@@ -446,4 +446,128 @@ mod tests {
 
         assert!(document.chain_preview.is_none());
     }
+
+    // ── vertical navigation tests ──
+
+    #[test]
+    fn move_up_down_clears_selection() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "line one\nline two\nline three\n",
+            TextPosition::new(1, 4),
+        );
+
+        // Extend selection with shift-right
+        document.select_right().unwrap();
+        assert!(document.selected_text().is_some());
+        assert_eq!(document.cursor, TextPosition::new(1, 5));
+
+        // move_up clears selection, preserves column (5 fits on "line one"=8 chars)
+        document.move_up().unwrap();
+        assert!(document.selected_text().is_none());
+        assert_eq!(document.cursor, TextPosition::new(0, 5));
+    }
+
+    #[test]
+    fn move_down_clamps_column_to_shorter_line() {
+        let mut document = GpuiEditorDocument::from_text(
+            "test.yaml",
+            "abc\nvery long line here\n",
+            TextPosition::new(0, 2),
+        );
+
+        document.move_down().unwrap();
+        // Column preserved on longer line
+        assert_eq!(document.cursor, TextPosition::new(1, 2));
+
+        document.move_up().unwrap();
+        // Column still fits on "abc" (len 3)
+        assert_eq!(document.cursor, TextPosition::new(0, 2));
+    }
+
+    #[test]
+    fn move_up_clamps_from_long_to_short_line() {
+        let mut document = GpuiEditorDocument::from_text(
+            "test.yaml",
+            "abc\nvery long line here\n",
+            TextPosition::new(1, 10),
+        );
+
+        document.move_up().unwrap();
+        assert_eq!(document.cursor, TextPosition::new(0, 3)); // clamped to "abc".len()
+    }
+
+    #[test]
+    fn select_up_and_down_extend_selection() {
+        let mut document = GpuiEditorDocument::from_text(
+            "test.yaml",
+            "alpha\nbeta\ngamma\n",
+            TextPosition::new(1, 2),
+        );
+
+        document.select_up().unwrap();
+        assert_eq!(document.cursor, TextPosition::new(0, 2));
+        // Selection spans from anchor (1,2) to cursor (0,2), crossing lines
+        let sel = document.selected_text().unwrap();
+        assert!(!sel.is_empty(), "selection should be non-empty: {sel:?}");
+
+        // select_down returns to original position — now anchor == cursor
+        document.select_down().unwrap();
+        assert_eq!(document.cursor, TextPosition::new(1, 2));
+        assert!(
+            document.selected_text().is_none(),
+            "selection should clear when anchor==cursor"
+        );
+    }
+
+    #[test]
+    fn home_end_navigation_clears_selection() {
+        let mut document =
+            GpuiEditorDocument::from_text("test.yaml", "alpha\nbeta\n", TextPosition::new(1, 2));
+
+        document.move_line_start().unwrap();
+        assert_eq!(document.cursor, TextPosition::new(1, 0));
+        assert!(document.selected_text().is_none());
+
+        document.move_line_end().unwrap();
+        assert_eq!(document.cursor, TextPosition::new(1, 4)); // "beta" is 4 chars
+        assert!(document.selected_text().is_none());
+    }
+
+    #[test]
+    fn page_up_down_navigation() {
+        let text: String = (0..30).map(|i| format!("line {i}\n")).collect();
+        let mut document =
+            GpuiEditorDocument::from_text("tall.yaml", &text, TextPosition::new(20, 5));
+
+        document.page_up().unwrap();
+        // 20 - PAGE_LINES(25) = 0 (saturated)
+        assert_eq!(document.cursor.line, 0);
+        assert!(document.selected_text().is_none());
+
+        document.page_down().unwrap();
+        assert_eq!(document.cursor.line, 25);
+        assert!(document.selected_text().is_none());
+    }
+
+    #[test]
+    fn selection_preserved_after_vertical_navigation() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enable: true\n",
+            TextPosition::new(1, 2),
+        );
+
+        // Select right 6 chars on line 1 (move from col 2 to col 8)
+        for _ in 0..6 {
+            document.select_right().unwrap();
+        }
+        assert_eq!(document.cursor, TextPosition::new(1, 8));
+        assert_eq!(document.selected_text().unwrap(), "enable");
+
+        // Move up — selection clears, column 8 clamped to "dns:" len (4)
+        document.move_up().unwrap();
+        assert!(document.selected_text().is_none());
+        assert_eq!(document.cursor, TextPosition::new(0, 4));
+    }
 }
