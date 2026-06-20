@@ -191,11 +191,7 @@ impl GpuiEditorDocument {
     }
 
     pub(crate) fn insert_text(&mut self, text: &str) -> Result<(), EditorError> {
-        self.cursor = self.editor.insert_text_at(self.cursor, text)?;
-        self.clear_selection();
-        self.mark_dirty();
-        self.refresh_derived();
-        Ok(())
+        self.replace_utf16_range(None, text)
     }
 
     pub(crate) fn commit_text(&mut self, text: &str) -> Result<(), EditorError> {
@@ -236,6 +232,10 @@ impl GpuiEditorDocument {
     }
 
     pub(crate) fn backspace(&mut self) -> Result<(), EditorError> {
+        if self.delete_selected_text()? {
+            return Ok(());
+        }
+
         self.cursor = self.editor.backspace_at(self.cursor)?;
         self.clear_selection();
         self.mark_dirty();
@@ -244,6 +244,10 @@ impl GpuiEditorDocument {
     }
 
     pub(crate) fn delete(&mut self) -> Result<(), EditorError> {
+        if self.delete_selected_text()? {
+            return Ok(());
+        }
+
         self.cursor = self.editor.delete_at(self.cursor)?;
         self.clear_selection();
         self.mark_dirty();
@@ -414,9 +418,9 @@ impl GpuiEditorDocument {
             .or(self.ime_marked_range)
             .or_else(|| self.selected_range().map(ordered_text_range))
             .unwrap_or_else(|| TextRange::empty(self.cursor));
+        let range = ordered_text_range(range);
 
-        self.editor
-            .apply_edit(TextEdit::replace(ordered_text_range(range), text))?;
+        self.editor.apply_edit(TextEdit::replace(range, text))?;
         self.cursor = position_after_insert(range.start, text);
         self.ime_marked_range = None;
         self.clear_selection();
@@ -802,6 +806,20 @@ impl GpuiEditorDocument {
 
     fn clear_selection(&mut self) {
         self.selection_anchor = None;
+    }
+
+    fn delete_selected_text(&mut self) -> Result<bool, EditorError> {
+        let Some(range) = self.selected_range().map(ordered_text_range) else {
+            return Ok(false);
+        };
+
+        self.editor.apply_edit(TextEdit::delete(range))?;
+        self.cursor = range.start;
+        self.ime_marked_range = None;
+        self.clear_selection();
+        self.mark_dirty();
+        self.refresh_derived();
+        Ok(true)
     }
 
     pub(crate) fn selected_range(&self) -> Option<TextRange> {

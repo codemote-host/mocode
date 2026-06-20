@@ -430,6 +430,109 @@ mod tests {
     }
 
     #[test]
+    fn selection_insert_replaces_selected_text() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enhanced-mode: redir-host\n",
+            TextPosition::new(1, 17),
+        );
+
+        for _ in 0.."redir-host".chars().count() {
+            document.select_right().unwrap();
+        }
+        assert_eq!(document.selected_text().unwrap(), "redir-host");
+
+        document.insert_text("fake-ip").unwrap();
+
+        assert_eq!(
+            document.line_at(1).unwrap().text,
+            "  enhanced-mode: fake-ip"
+        );
+        assert_eq!(document.cursor, TextPosition::new(1, 24));
+        assert!(document.selected_text().is_none());
+        assert_eq!(document.selection_summary, "<none>");
+    }
+
+    #[test]
+    fn selection_commit_replaces_selected_text_with_unicode() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "proxies:\n  - name: old-name\n",
+            TextPosition::new(1, 10),
+        );
+
+        for _ in 0.."old-name".chars().count() {
+            document.select_right().unwrap();
+        }
+
+        document.commit_text("香港节点").unwrap();
+
+        assert_eq!(document.line_at(1).unwrap().text, "  - name: 香港节点");
+        assert_eq!(document.cursor, TextPosition::new(1, 14));
+        assert!(document.selected_text().is_none());
+    }
+
+    #[test]
+    fn selection_backspace_deletes_selected_text() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enhanced-mode: fake-ip\n",
+            TextPosition::new(1, 17),
+        );
+
+        for _ in 0.."fake-ip".chars().count() {
+            document.select_right().unwrap();
+        }
+
+        document.backspace().unwrap();
+
+        assert_eq!(document.line_at(1).unwrap().text, "  enhanced-mode: ");
+        assert_eq!(document.cursor, TextPosition::new(1, 17));
+        assert!(document.selected_text().is_none());
+    }
+
+    #[test]
+    fn selection_delete_deletes_reversed_selected_text() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enhanced-mode: fake-ip\n",
+            TextPosition::new(1, 24),
+        );
+
+        for _ in 0.."fake-ip".chars().count() {
+            document.select_left().unwrap();
+        }
+        assert_eq!(document.selected_text().unwrap(), "fake-ip");
+
+        document.delete().unwrap();
+
+        assert_eq!(document.line_at(1).unwrap().text, "  enhanced-mode: ");
+        assert_eq!(document.cursor, TextPosition::new(1, 17));
+        assert!(document.selected_text().is_none());
+    }
+
+    #[test]
+    fn selection_paste_path_replaces_selected_text() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enhanced-mode: redir-host\n",
+            TextPosition::new(1, 17),
+        );
+
+        for _ in 0.."redir-host".chars().count() {
+            document.select_right().unwrap();
+        }
+
+        document.insert_text("fake-ip").unwrap();
+
+        assert_eq!(
+            document.line_at(1).unwrap().text,
+            "  enhanced-mode: fake-ip"
+        );
+        assert_eq!(document.cursor, TextPosition::new(1, 24));
+    }
+
+    #[test]
     fn document_text_returns_current_core_text() {
         let mut document = GpuiEditorDocument::from_text(
             "scratch.yaml",
@@ -472,11 +575,8 @@ mod tests {
         let mut document = GpuiEditorDocument::from_text(
             "scratch.yaml",
             "dns:\n  enhanced-mode: \n",
-            TextPosition::new(1, 16),
+            TextPosition::new(1, 17),
         );
-
-        document.select_right().unwrap();
-        assert!(document.selected_text().is_some());
 
         document.insert_text("fake-ip").unwrap();
         assert_eq!(document.cursor, TextPosition::new(1, 24));
@@ -486,9 +586,6 @@ mod tests {
         );
         assert!(document.dirty);
         assert_eq!(document.selection_summary, "<none>");
-
-        document.select_left().unwrap();
-        assert!(document.selected_text().is_some());
 
         document.undo().unwrap();
         assert_eq!(document.cursor, TextPosition::new(1, 17));
