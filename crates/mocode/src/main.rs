@@ -18,7 +18,7 @@ mod tests {
 
     use crate::{
         app,
-        component::{GpuiEditorDocument, GpuiEditorSaveError, GpuiSearchHighlight},
+        component::{GpuiEditorDocument, GpuiEditorSaveError, GpuiSearchHighlight, find_bar_label},
         fixtures::{SAMPLE_TITLE, default_fixture, document_by_fixture_id, document_from_fixture},
     };
 
@@ -840,6 +840,55 @@ mod tests {
         assert!(document.search_active);
         assert_eq!(document.search_query, "enhanced-mode");
         assert_eq!(document.search_summary, "enhanced-mode - 1/1 at 2:3");
+    }
+
+    #[test]
+    fn find_bar_hidden_when_search_is_inactive() {
+        let document =
+            GpuiEditorDocument::from_text("search.yaml", "alpha\n", TextPosition::new(0, 0));
+
+        assert_eq!(find_bar_label(&document), None);
+    }
+
+    #[test]
+    fn find_bar_shows_query_and_match_summary_when_active() {
+        let mut document = GpuiEditorDocument::from_text(
+            "search.yaml",
+            "alpha\nbeta alpha\n",
+            TextPosition::new(0, 0),
+        );
+
+        document.set_search_query("alpha");
+        document.find_next();
+
+        assert_eq!(
+            find_bar_label(&document),
+            Some("Find: alpha - 1/2 at 1:1".to_string())
+        );
+    }
+
+    #[test]
+    fn find_bar_disappears_after_escape_closes_search() {
+        let mut document =
+            GpuiEditorDocument::from_text("search.yaml", "alpha\n", TextPosition::new(0, 0));
+
+        document.set_search_query("alpha");
+        document.find_next();
+        assert!(find_bar_label(&document).is_some());
+
+        document.close_search();
+
+        assert_eq!(find_bar_label(&document), None);
+    }
+
+    #[test]
+    fn status_bar_renders_inline_find_bar_without_search_panel() {
+        let component_source = include_str!("component.rs");
+
+        assert!(component_source.contains("find_bar_label(document)"));
+        assert!(component_source.contains("fn find_bar("));
+        assert!(component_source.contains("status_bar(editor.document())"));
+        assert!(!component_source.contains("search_panel("));
     }
 
     #[test]

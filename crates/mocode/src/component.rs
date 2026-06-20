@@ -1614,9 +1614,7 @@ fn status_bar(document: &GpuiEditorDocument) -> impl IntoElement {
     );
     let selection = (document.selection_summary != "<none>")
         .then(|| format!("Sel {}", document.selection_summary));
-    let search = document
-        .search_active
-        .then(|| format!("Find {}", document.search_summary));
+    let find = find_bar_label(document);
 
     div()
         .flex()
@@ -1637,7 +1635,7 @@ fn status_bar(document: &GpuiEditorDocument) -> impl IntoElement {
         .child(status_item(format!("Path {}", document.current_yaml_path)))
         .child(status_item(diagnostics_summary(document)))
         .child(status_item(completion_summary(document)))
-        .when_some(search, |this, search| this.child(status_item(search)))
+        .when_some(find, |this, find| this.child(find_bar(find)))
         .child(status_item(chain_preview_summary(document)))
 }
 
@@ -1648,6 +1646,40 @@ fn status_item(text: String) -> impl IntoElement {
         .overflow_hidden()
         .text_ellipsis()
         .child(text)
+}
+
+pub(crate) fn find_bar_label(document: &GpuiEditorDocument) -> Option<String> {
+    document
+        .search_active
+        .then(|| format!("Find: {}", document.search_summary))
+}
+
+fn find_bar(text: String) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .max_w(px(420.0))
+        .px_2()
+        .py_0p5()
+        .rounded_sm()
+        .border_1()
+        .border_color(rgb(0xf59e0b))
+        .bg(rgb(0xfffbeb))
+        .text_color(rgb(0x78350f))
+        .whitespace_nowrap()
+        .overflow_hidden()
+        .text_ellipsis()
+        .child(text)
+        .child(
+            div()
+                .px_1()
+                .rounded_sm()
+                .bg(rgb(0xfef3c7))
+                .text_color(rgb(0x92400e))
+                .child("Esc"),
+        )
 }
 
 fn diagnostics_summary(document: &GpuiEditorDocument) -> String {
