@@ -31,8 +31,8 @@ Application scope:
 - search and select matches
 - line numbers, cursor, selection, copy/paste, undo/redo baseline
 - syntax highlighting and diagnostics rendering
-- completion popup and hover popup
-- right-side path and proxy-chain panels
+- bottom status bar for cursor, YAML path, diagnostics, completion count, search state, and proxy-chain preview
+- future completion popup and hover popup sourced only from `mocode-core`
 - 5000-20000 line file loading and scrolling validation
 - Chinese IME validation
 

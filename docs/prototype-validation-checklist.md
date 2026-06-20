@@ -12,7 +12,7 @@ Validate only the editor component boundary:
 - `mocode` app behavior
 - large YAML loading baseline
 - Windows Chinese IME behavior
-- focus, popup, scroll, clipboard, save, and packaging observations
+- focus, scroll, clipboard, save, input, and packaging observations
 
 Do not use this checklist to expand mocode into a full Mihomo GUI. TUN control, system proxy control, subscriptions, WebDAV, tray integration, and Mihomo core process management are out of scope.
 
@@ -23,19 +23,9 @@ Do not use this checklist to expand mocode into a full Mihomo GUI. TUN control, 
 | `examples/configs/large.yaml` | 5372 | Current semantic large-file baseline with generated proxies, groups, and rules. |
 | `examples/configs/large-20000.yaml` | 20000 | Current 20000-line editor loading baseline. It starts from `large.yaml` and appends YAML comments as padding. |
 
-The built-in fixture selector exposes:
-
-- Dialer
-- Minimal
-- DNS
-- TUN
-- Groups
-- Providers
-- Bad YAML
-- Bad Ref
-- Cycle
-- Large
-- 20k
+The app no longer renders sample fixture buttons by default. Use command-line
+file paths for manual checks and the fixture-backed tests for repeatable large,
+invalid YAML, invalid reference, and cycle coverage.
 
 ## Automated Validation
 
@@ -90,12 +80,12 @@ Record:
 - Whether the Open button can load another YAML file.
 - Whether search can be started from selected text and move to next/previous matches.
 - Whether diagnostics update after editing invalid YAML.
-- Whether the completion strip updates when the cursor changes.
-- Whether the completion popup anchor changes when the cursor changes.
-- Whether the inspector shows current YAML path, selection summary, hover summary, diagnostics, and chain preview.
-- Whether focus returns to the editor after interacting with visible panels and fixture selector buttons.
+- Whether the bottom status bar updates cursor position, YAML path, diagnostics, completion count, search state, and chain preview.
+- Whether the editor keeps focus after using Open, Save, Save As, and keyboard commands.
 
-Use the fixture selector to switch to `Large`, `20k`, `Bad YAML`, `Bad Ref`, and `Cycle`. Use the Open button or command-line argument for real YAML files.
+Use command-line paths or the Open button to load `examples/configs/large.yaml`,
+`examples/configs/large-20000.yaml`, `examples/configs/invalid-yaml.yaml`,
+`tests/fixtures/invalid-reference.yaml`, and `tests/fixtures/dialer-cycle.yaml`.
 
 ## Daily File Workflow Script
 
@@ -117,7 +107,7 @@ Do not run this script directly on the only copy of a production config.
 2. Start search from the selection.
 3. Move to the next match.
 4. Move to the previous match.
-5. Verify the search panel shows the query, ordinal, total match count, and match location.
+5. Verify the status bar shows the query, ordinal, total match count, and match location.
 6. Verify the current match is selected in the editor surface.
 
 ## Windows Chinese IME Script
@@ -145,7 +135,7 @@ Record these fields:
 
 ## Scroll And Focus Script
 
-Use the fixture selector to load `Large` and `20k`.
+Launch with `examples/configs/large.yaml` and `examples/configs/large-20000.yaml`.
 
 Record:
 
@@ -154,7 +144,7 @@ Record:
 - Whether row height stays stable.
 - Whether line number gutter stays aligned.
 - Whether cursor rendering remains aligned with text.
-- Whether completion/hover panels steal focus.
+- Whether future completion/hover surfaces steal focus after they are reintroduced.
 - Whether diagnostics remain attached to the intended lines.
 - Whether CPU usage spikes persist after scrolling stops.
 
@@ -163,15 +153,15 @@ Record:
 1. Focus the editor surface.
 2. Move to a scalar text position.
 3. Press Shift+Right several times.
-4. Verify the inspector selection summary changes from `<none>` to a range.
+4. Verify the status bar selection summary changes from `<none>` to a range.
 5. Press Ctrl+C on Windows/Linux or Cmd+C on macOS.
 6. Paste into an external text field and verify the selected YAML text was copied.
-7. Press Right without Shift and verify the selection summary returns to `<none>`.
+7. Press Right without Shift and verify the status bar selection summary disappears.
 8. Repeat Shift+Left from the same line and verify reversed selection still copies the expected text.
 
 ## Completion And Hover Script
 
-Test with the built-in sample:
+Test with a sample config or the fixture-backed automated tests:
 
 - Root field completion at the first line should include `mixed-port`.
 - `dns.enhanced-mode` completion should include `fake-ip`.
@@ -180,17 +170,15 @@ Test with the built-in sample:
 - Hover over `tun.stack` should show Mihomo schema documentation.
 - Hover over `proxies[].dialer-proxy` should explain outbound chaining.
 
-Record whether the popup panel shows the expected `Popup @ line:column` anchor and whether the first few popup items match the completion strip.
+Record whether the status bar completion count changes as expected. Full completion and hover popup rendering is a later hardening task; it must continue to source data from `mocode-core`.
 
 ## Diagnostic Script
 
-Use existing automated fixtures through the selector and tests:
+Use existing automated fixtures through tests or by opening the files directly:
 
 - `examples/configs/invalid-yaml.yaml` should produce a `yaml.syntax` diagnostic.
 - `tests/fixtures/invalid-reference.yaml` should produce a missing-reference diagnostic.
 - `tests/fixtures/dialer-cycle.yaml` should produce a `mihomo.dialer_proxy.cycle` diagnostic.
-
-The selector labels for these are `Bad YAML`, `Bad Ref`, and `Cycle`.
 
 ## Result Record Template
 
@@ -204,7 +192,7 @@ Do not treat the app shell as production-ready until these items are recorded:
 
 - Windows Chinese IME commit and preedit behavior.
 - Interactive scroll behavior with a 5000-20000 line YAML file.
-- Focus behavior around completion and hover surfaces.
+- Focus behavior around future completion and hover surfaces.
 - Keyboard selection and copy ergonomics.
 - Release binary size.
 

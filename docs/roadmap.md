@@ -58,7 +58,7 @@ Deliverables:
 - diagnostics rendering
 - hover docs
 - completions
-- right-side YAML path and chain preview panels
+- bottom status bar for YAML path, diagnostics, completions, search, and chain preview
 - IME and performance notes
 
 ## Phase 3: Editor Hardening
@@ -68,9 +68,9 @@ Deliverables:
 - robust IME commit and preedit handling
 - viewport-only rendering for 20000-line files
 - click/selection coordinate correctness
-- popup focus and keyboard navigation
+- completion and hover popup focus plus keyboard navigation
 - syntax highlighting pass
-- search panel
+- search status and navigation
 - paste indentation policy
 - screenshot/manual validation notes
 

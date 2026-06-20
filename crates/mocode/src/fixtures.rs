@@ -96,10 +96,6 @@ const APP_FIXTURES: &[AppFixture] = &[
     },
 ];
 
-pub(crate) fn all_fixtures() -> &'static [AppFixture] {
-    APP_FIXTURES
-}
-
 pub(crate) fn default_fixture() -> &'static AppFixture {
     fixture_by_id(DEFAULT_FIXTURE_ID).expect("default fixture must exist")
 }
@@ -116,6 +112,7 @@ pub(crate) fn default_document() -> GpuiEditorDocument {
     document_from_fixture(default_fixture())
 }
 
+#[cfg(test)]
 pub(crate) fn document_by_fixture_id(id: &str) -> Option<GpuiEditorDocument> {
     fixture_by_id(id).map(document_from_fixture)
 }

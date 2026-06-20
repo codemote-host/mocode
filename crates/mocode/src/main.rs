@@ -189,11 +189,25 @@ mod tests {
     }
 
     #[test]
-    fn fixture_selector_iterates_over_all_registered_fixtures() {
+    fn app_header_does_not_render_fixture_buttons() {
         let app_source = include_str!("app.rs");
 
         assert!(!app_source.contains("fixtures["));
-        assert!(app_source.contains("all_fixtures().iter()"));
+        assert!(!app_source.contains("all_fixtures().iter()"));
+        assert!(!app_source.contains("fixture_selector"));
+    }
+
+    #[test]
+    fn normal_editor_shell_does_not_stack_debug_panels() {
+        let component_source = include_str!("component.rs");
+        let app_source = include_str!("app.rs");
+
+        assert!(!component_source.contains("search_panel("));
+        assert!(!component_source.contains("completion_panel("));
+        assert!(!component_source.contains("completion_popup_panel("));
+        assert!(!component_source.contains("Popup @"));
+        assert!(!app_source.contains("fixture_selector("));
+        assert!(component_source.contains("status_bar("));
     }
 
     #[test]
@@ -354,6 +368,48 @@ mod tests {
         );
         assert_eq!(document.current_yaml_path, "dns.enhanced-mode");
         assert!(document.completion_labels.contains(&"fake-ip".to_string()));
+    }
+
+    #[test]
+    fn daily_tab_inserts_two_spaces_at_cursor() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\nmode: fake-ip\n",
+            TextPosition::new(1, 0),
+        );
+
+        document.insert_tab().unwrap();
+
+        assert_eq!(document.line_at(1).unwrap().text, "  mode: fake-ip");
+        assert_eq!(document.cursor, TextPosition::new(1, 2));
+    }
+
+    #[test]
+    fn daily_shift_tab_outdents_current_line() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  mode: fake-ip\n",
+            TextPosition::new(1, 7),
+        );
+
+        document.outdent_current_line().unwrap();
+
+        assert_eq!(document.line_at(1).unwrap().text, "mode: fake-ip");
+        assert_eq!(document.cursor, TextPosition::new(1, 5));
+    }
+
+    #[test]
+    fn daily_ime_commit_inserts_unicode_text() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "proxies:\n  - name: \n",
+            TextPosition::new(1, 10),
+        );
+
+        document.commit_text("香港节点").unwrap();
+
+        assert_eq!(document.line_at(1).unwrap().text, "  - name: 香港节点");
+        assert_eq!(document.cursor, TextPosition::new(1, 14));
     }
 
     #[test]

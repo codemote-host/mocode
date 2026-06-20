@@ -1,15 +1,18 @@
-use std::path::{Path, PathBuf};
+use std::{
+    ops::Range,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     component::{
         self, GpuiEditorComponent, GpuiEditorDocument, GpuiEditorHost, render_editor_component,
     },
-    fixtures::{AppFixture, all_fixtures, default_document, document_by_fixture_id},
+    fixtures::default_document,
 };
 use gpui::{
-    App, Application, Bounds, Context, FocusHandle, Focusable, IntoElement, MouseButton,
-    MouseDownEvent, PathPromptOptions, Render, Window, WindowBounds, WindowOptions, div,
-    prelude::*, px, rgb, size,
+    App, Application, Bounds, Context, EntityInputHandler, FocusHandle, Focusable, IntoElement,
+    MouseButton, MouseDownEvent, PathPromptOptions, Pixels, Point, Render, UTF16Selection, Window,
+    WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
 };
 
 pub(crate) fn run() {
@@ -63,14 +66,6 @@ struct MocodeApp {
 }
 
 impl MocodeApp {
-    fn select_fixture(&mut self, id: &'static str, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(document) = document_by_fixture_id(id) {
-            self.editor.replace_document(document);
-            self.editor.focus(window);
-            cx.notify();
-        }
-    }
-
     fn suggested_save_name(&self) -> String {
         self.editor
             .document()
@@ -195,6 +190,112 @@ impl GpuiEditorHost for MocodeApp {
     }
 }
 
+impl EntityInputHandler for MocodeApp {
+    fn text_for_range(
+        &mut self,
+        range: Range<usize>,
+        adjusted_range: &mut Option<Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<String> {
+        self.editor
+            .document()
+            .text_for_utf16_range(range, adjusted_range)
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _ignore_disabled_input: bool,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        let (range, reversed) = self.editor.document().selected_utf16_range();
+        Some(UTF16Selection { range, reversed })
+    }
+
+    fn marked_text_range(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Range<usize>> {
+        self.editor.document().marked_utf16_range()
+    }
+
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.editor.document_mut().unmark_ime_text();
+        cx.notify();
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.editor.document().search_active {
+            self.editor.document_mut().append_search_input(text);
+            cx.notify();
+            return;
+        }
+
+        if self
+            .editor
+            .document_mut()
+            .replace_utf16_range(range, text)
+            .is_ok()
+        {
+            cx.notify();
+        }
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        new_text: &str,
+        new_selected_range: Option<Range<usize>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.editor.document().search_active {
+            self.editor.document_mut().append_search_input(new_text);
+            cx.notify();
+            return;
+        }
+
+        if self
+            .editor
+            .document_mut()
+            .replace_and_mark_utf16_range(range, new_text, new_selected_range)
+            .is_ok()
+        {
+            cx.notify();
+        }
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        range_utf16: Range<usize>,
+        element_bounds: Bounds<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        self.editor
+            .document()
+            .bounds_for_utf16_range(range_utf16, element_bounds)
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        point: Point<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        let bounds = self.editor.line_list_bounds()?;
+        self.editor.document().utf16_index_for_point(point, bounds)
+    }
+}
+
 impl Focusable for MocodeApp {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.editor.focus_handle().clone()
@@ -202,7 +303,7 @@ impl Focusable for MocodeApp {
 }
 
 impl Render for MocodeApp {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         div()
             .size_full()
             .bg(rgb(0xf7f9fc))
@@ -214,7 +315,7 @@ impl Render for MocodeApp {
                     .flex_col()
                     .size_full()
                     .child(header(&self.editor, cx))
-                    .child(render_editor_component(&self.editor, cx)),
+                    .child(render_editor_component(&self.editor, window, cx)),
             )
     }
 }
@@ -254,7 +355,6 @@ fn header(editor: &GpuiEditorComponent, cx: &mut Context<'_, MocodeApp>) -> impl
                 )),
         )
         .child(command_buttons(cx))
-        .child(fixture_selector(cx))
         .child(
             div()
                 .text_color(rgb(0x5f6b7a))
@@ -278,14 +378,6 @@ fn command_buttons(cx: &mut Context<'_, MocodeApp>) -> impl IntoElement {
         }))
 }
 
-fn fixture_selector(cx: &mut Context<'_, MocodeApp>) -> impl IntoElement {
-    let mut selector = div().flex().flex_row().gap_1();
-    for fixture in all_fixtures().iter() {
-        selector = selector.child(fixture_button(fixture, cx));
-    }
-    selector
-}
-
 fn command_button(
     label: &'static str,
     cx: &mut Context<'_, MocodeApp>,
@@ -304,28 +396,6 @@ fn command_button(
             MouseButton::Left,
             cx.listener(move |this, _: &MouseDownEvent, window: &mut Window, cx| {
                 handler(this, window, cx);
-            }),
-        )
-}
-
-fn fixture_button(
-    fixture: &'static AppFixture,
-    cx: &mut Context<'_, MocodeApp>,
-) -> impl IntoElement {
-    let fixture_id = fixture.id;
-    div()
-        .px_2()
-        .py_1()
-        .bg(rgb(0xf8fafc))
-        .border_1()
-        .border_color(rgb(0xd9e2ec))
-        .text_color(rgb(0x334155))
-        .text_size(px(11.0))
-        .child(fixture.label)
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(move |this, _: &MouseDownEvent, window: &mut Window, cx| {
-                this.select_fixture(fixture_id, window, cx);
             }),
         )
 }

@@ -1,25 +1,34 @@
 use std::{
     cell::RefCell,
     fs, io,
+    ops::Range,
     path::{Path, PathBuf},
     rc::Rc,
 };
 
 use mocode_api::{
     CompletionKind, DiagnosticSeverity, EditorError, MocodeEditor, ProxyChainPreview,
-    ProxyChainStatus, TextPosition, TextRange,
+    ProxyChainStatus, TextEdit, TextPosition, TextRange,
 };
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, FocusHandle, IntoElement, KeyBinding, KeyDownEvent,
-    MouseButton, MouseDownEvent, Pixels, Window, actions, div, prelude::*, px, rgb, uniform_list,
+    App, Bounds, ClipboardItem, Context, ElementInputHandler, EntityInputHandler, FocusHandle,
+    IntoElement, KeyBinding, MouseButton, MouseDownEvent, Pixels, Point, Window, actions, div,
+    point, prelude::*, px, rgb, uniform_list,
 };
+
+const LINE_HEIGHT_PX: f32 = 22.0;
+const GUTTER_WIDTH_PX: f32 = 64.0;
+const CHAR_WIDTH_PX: f32 = 7.5;
+const TAB_WIDTH: &str = "  ";
 
 actions!(
     mocode_editor,
     [
         Backspace,
         Delete,
+        Tab,
+        ShiftTab,
         Left,
         Right,
         SelectLeft,
@@ -107,6 +116,7 @@ pub(crate) struct GpuiEditorDocument {
     pub(crate) search_active: bool,
     pub(crate) search_query: String,
     pub(crate) search_summary: String,
+    ime_marked_range: Option<TextRange>,
 }
 
 impl GpuiEditorDocument {
@@ -174,6 +184,7 @@ impl GpuiEditorDocument {
             search_active: false,
             search_query: String::new(),
             search_summary: "<none>".to_string(),
+            ime_marked_range: None,
         };
         document.refresh_derived();
         document
@@ -181,6 +192,43 @@ impl GpuiEditorDocument {
 
     pub(crate) fn insert_text(&mut self, text: &str) -> Result<(), EditorError> {
         self.cursor = self.editor.insert_text_at(self.cursor, text)?;
+        self.clear_selection();
+        self.mark_dirty();
+        self.refresh_derived();
+        Ok(())
+    }
+
+    pub(crate) fn commit_text(&mut self, text: &str) -> Result<(), EditorError> {
+        self.replace_utf16_range(None, text)
+    }
+
+    pub(crate) fn insert_tab(&mut self) -> Result<(), EditorError> {
+        self.commit_text(TAB_WIDTH)
+    }
+
+    pub(crate) fn outdent_current_line(&mut self) -> Result<(), EditorError> {
+        let Some(line_text) = self.editor.line_text(self.cursor.line as usize) else {
+            return Ok(());
+        };
+        let remove_count = line_text
+            .chars()
+            .take(TAB_WIDTH.chars().count())
+            .take_while(|ch| *ch == ' ')
+            .count();
+
+        if remove_count == 0 {
+            return Ok(());
+        }
+
+        let start = TextPosition::new(self.cursor.line, 0);
+        let end = TextPosition::new(self.cursor.line, remove_count as u32);
+        self.editor
+            .apply_edit(TextEdit::delete(TextRange::new(start, end)))?;
+        self.cursor = TextPosition::new(
+            self.cursor.line,
+            self.cursor.character.saturating_sub(remove_count as u32),
+        );
+        self.ime_marked_range = None;
         self.clear_selection();
         self.mark_dirty();
         self.refresh_derived();
@@ -320,6 +368,179 @@ impl GpuiEditorDocument {
 
     pub(crate) fn text(&self) -> String {
         self.editor.text()
+    }
+
+    pub(crate) fn text_for_utf16_range(
+        &self,
+        range_utf16: Range<usize>,
+        adjusted_range: &mut Option<Range<usize>>,
+    ) -> Option<String> {
+        let clamped = self.clamp_utf16_range(range_utf16);
+        let range = self.text_range_from_utf16(clamped.clone());
+        adjusted_range.replace(clamped);
+        self.editor.text_in_range(range).ok()
+    }
+
+    pub(crate) fn selected_utf16_range(&self) -> (Range<usize>, bool) {
+        let Some(range) = self.selected_range() else {
+            let cursor = self.utf16_index_for_position(self.cursor);
+            return (cursor..cursor, false);
+        };
+        let reversed = range.start > range.end;
+        let ordered = ordered_text_range(range);
+        (
+            self.utf16_index_for_position(ordered.start)
+                ..self.utf16_index_for_position(ordered.end),
+            reversed,
+        )
+    }
+
+    pub(crate) fn marked_utf16_range(&self) -> Option<Range<usize>> {
+        let range = ordered_text_range(self.ime_marked_range?);
+        Some(self.utf16_index_for_position(range.start)..self.utf16_index_for_position(range.end))
+    }
+
+    pub(crate) fn unmark_ime_text(&mut self) {
+        self.ime_marked_range = None;
+    }
+
+    pub(crate) fn replace_utf16_range(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        text: &str,
+    ) -> Result<(), EditorError> {
+        let range = range_utf16
+            .map(|range| self.text_range_from_utf16(self.clamp_utf16_range(range)))
+            .or(self.ime_marked_range)
+            .or_else(|| self.selected_range().map(ordered_text_range))
+            .unwrap_or_else(|| TextRange::empty(self.cursor));
+
+        self.editor
+            .apply_edit(TextEdit::replace(ordered_text_range(range), text))?;
+        self.cursor = position_after_insert(range.start, text);
+        self.ime_marked_range = None;
+        self.clear_selection();
+        self.mark_dirty();
+        self.refresh_derived();
+        Ok(())
+    }
+
+    pub(crate) fn replace_and_mark_utf16_range(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        text: &str,
+        selected_range_utf16: Option<Range<usize>>,
+    ) -> Result<(), EditorError> {
+        let range = range_utf16
+            .map(|range| self.text_range_from_utf16(self.clamp_utf16_range(range)))
+            .or(self.ime_marked_range)
+            .or_else(|| self.selected_range().map(ordered_text_range))
+            .unwrap_or_else(|| TextRange::empty(self.cursor));
+        let range = ordered_text_range(range);
+
+        self.editor.apply_edit(TextEdit::replace(range, text))?;
+        let inserted_start = range.start;
+        let inserted_end = position_after_insert(inserted_start, text);
+        self.ime_marked_range =
+            (!text.is_empty()).then_some(TextRange::new(inserted_start, inserted_end));
+        self.cursor = selected_range_utf16
+            .map(|range| position_after_utf16_prefix(inserted_start, text, range.end))
+            .unwrap_or(inserted_end);
+        self.clear_selection();
+        self.mark_dirty();
+        self.refresh_derived();
+        Ok(())
+    }
+
+    pub(crate) fn bounds_for_utf16_range(
+        &self,
+        range_utf16: Range<usize>,
+        element_bounds: Bounds<Pixels>,
+    ) -> Option<Bounds<Pixels>> {
+        let position = self.position_for_utf16_index(range_utf16.start);
+        if position.line as usize >= self.line_count {
+            return None;
+        }
+
+        let left =
+            element_bounds.left() + px(GUTTER_WIDTH_PX + position.character as f32 * CHAR_WIDTH_PX);
+        let top = element_bounds.top() + px(position.line as f32 * LINE_HEIGHT_PX);
+        Some(Bounds::from_corners(
+            point(left, top),
+            point(left + px(CHAR_WIDTH_PX), top + px(LINE_HEIGHT_PX)),
+        ))
+    }
+
+    pub(crate) fn utf16_index_for_point(
+        &self,
+        point: Point<Pixels>,
+        element_bounds: Bounds<Pixels>,
+    ) -> Option<usize> {
+        let y: f32 = point.y.into();
+        let x: f32 = point.x.into();
+        let origin_y: f32 = element_bounds.top().into();
+        let origin_x: f32 = element_bounds.left().into();
+        let position = mouse_to_text_position(
+            y,
+            x,
+            origin_y,
+            origin_x,
+            GUTTER_WIDTH_PX,
+            CHAR_WIDTH_PX,
+            LINE_HEIGHT_PX,
+            self.line_count,
+            |line| {
+                self.editor
+                    .line_end_position(line as usize)
+                    .map(|position| position.character)
+                    .unwrap_or(0)
+            },
+        )?;
+        Some(self.utf16_index_for_position(position))
+    }
+
+    fn utf16_index_for_position(&self, position: TextPosition) -> usize {
+        self.editor
+            .text_in_range(TextRange::new(TextPosition::new(0, 0), position))
+            .map(|text| text.encode_utf16().count())
+            .unwrap_or(0)
+    }
+
+    fn position_for_utf16_index(&self, target: usize) -> TextPosition {
+        let mut utf16_index = 0usize;
+        let mut line = 0u32;
+        let mut character = 0u32;
+
+        for ch in self.text().chars() {
+            let width = ch.len_utf16();
+            if utf16_index + width > target {
+                break;
+            }
+
+            utf16_index += width;
+            if ch == '\n' {
+                line += 1;
+                character = 0;
+            } else {
+                character += 1;
+            }
+        }
+
+        TextPosition::new(line, character)
+    }
+
+    fn text_range_from_utf16(&self, range: Range<usize>) -> TextRange {
+        TextRange::new(
+            self.position_for_utf16_index(range.start),
+            self.position_for_utf16_index(range.end),
+        )
+    }
+
+    fn clamp_utf16_range(&self, range: Range<usize>) -> Range<usize> {
+        let len = self.text().encode_utf16().count();
+        let start = range.start.min(len);
+        let end = range.end.min(len);
+        if start <= end { start..end } else { end..start }
     }
 
     #[cfg(test)]
@@ -612,10 +833,6 @@ impl GpuiEditorComponent {
         &mut self.document
     }
 
-    pub(crate) fn replace_document(&mut self, document: GpuiEditorDocument) {
-        self.document = document;
-    }
-
     pub(crate) fn focus_handle(&self) -> &FocusHandle {
         &self.focus_handle
     }
@@ -624,16 +841,20 @@ impl GpuiEditorComponent {
         Rc::clone(&self.line_list_bounds)
     }
 
-    fn line_list_bounds(&self) -> Option<Bounds<Pixels>> {
+    pub(crate) fn line_list_bounds(&self) -> Option<Bounds<Pixels>> {
         *self.line_list_bounds.borrow()
-    }
-
-    pub(crate) fn focus(&self, window: &mut Window) {
-        self.focus_handle.focus(window);
     }
 
     fn insert_text(&mut self, text: &str) -> Result<(), EditorError> {
         self.document.insert_text(text)
+    }
+
+    fn insert_tab(&mut self) -> Result<(), EditorError> {
+        self.document.insert_tab()
+    }
+
+    fn outdent_current_line(&mut self) -> Result<(), EditorError> {
+        self.document.outdent_current_line()
     }
 
     fn backspace(&mut self) -> Result<(), EditorError> {
@@ -713,10 +934,6 @@ impl GpuiEditorComponent {
         self.document.start_search_from_selection();
     }
 
-    fn append_search_input(&mut self, text: &str) {
-        self.document.append_search_input(text);
-    }
-
     fn search_backspace(&mut self) {
         self.document.search_backspace();
     }
@@ -756,6 +973,8 @@ pub(crate) fn bind_editor_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("backspace", Backspace, Some("MocodeEditor")),
         KeyBinding::new("delete", Delete, Some("MocodeEditor")),
+        KeyBinding::new("tab", Tab, Some("MocodeEditor")),
+        KeyBinding::new("shift-tab", ShiftTab, Some("MocodeEditor")),
         KeyBinding::new("left", Left, Some("MocodeEditor")),
         KeyBinding::new("right", Right, Some("MocodeEditor")),
         KeyBinding::new("shift-left", SelectLeft, Some("MocodeEditor")),
@@ -797,36 +1016,35 @@ pub(crate) fn bind_editor_keys(cx: &mut App) {
 
 pub(crate) fn render_editor_component<T>(
     editor: &GpuiEditorComponent,
+    window: &mut Window,
     cx: &mut Context<'_, T>,
 ) -> impl IntoElement
 where
-    T: GpuiEditorHost + 'static,
+    T: GpuiEditorHost + EntityInputHandler + 'static,
 {
     div()
         .flex()
         .flex_col()
         .h_full()
-        .child(search_panel(editor.document()))
-        .child(completion_panel(editor.document()))
-        .child(completion_popup_panel(editor.document()))
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .h_full()
-                .child(editor_surface(editor, cx))
-                .child(inspector(editor.document())),
-        )
+        .child(editor_surface(editor, window, cx))
+        .child(status_bar(editor.document()))
 }
 
-fn editor_surface<T>(editor: &GpuiEditorComponent, cx: &mut Context<'_, T>) -> impl IntoElement
+fn editor_surface<T>(
+    editor: &GpuiEditorComponent,
+    _window: &mut Window,
+    cx: &mut Context<'_, T>,
+) -> impl IntoElement
 where
-    T: GpuiEditorHost + 'static,
+    T: GpuiEditorHost + EntityInputHandler + 'static,
 {
     let line_count = editor.document().line_count;
     let line_list_bounds = editor.line_list_bounds_handle();
+    let focus_handle = editor.focus_handle().clone();
+    let entity = cx.entity();
     div()
-        .w(px(820.0))
+        .flex_1()
+        .w_full()
         .h_full()
         .bg(rgb(0xffffff))
         .track_focus(editor.focus_handle())
@@ -846,6 +1064,18 @@ where
                 cx.notify();
             }
         }))
+        .on_action(cx.listener(|this: &mut T, _: &Tab, _: &mut Window, cx| {
+            if this.editor_component_mut().insert_tab().is_ok() {
+                cx.notify();
+            }
+        }))
+        .on_action(
+            cx.listener(|this: &mut T, _: &ShiftTab, _: &mut Window, cx| {
+                if this.editor_component_mut().outdent_current_line().is_ok() {
+                    cx.notify();
+                }
+            }),
+        )
         .on_action(cx.listener(|this: &mut T, _: &Undo, _: &mut Window, cx| {
             if this.editor_component_mut().undo().is_ok() {
                 cx.notify();
@@ -986,39 +1216,10 @@ where
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
             }
         }))
-        .on_key_down(
-            cx.listener(|this: &mut T, event: &KeyDownEvent, _: &mut Window, cx| {
-                let modifiers = &event.keystroke.modifiers;
-                if modifiers.control || modifiers.alt || modifiers.platform || modifiers.function {
-                    return;
-                }
-
-                let Some(text) = event.keystroke.key_char.as_deref() else {
-                    return;
-                };
-
-                if !is_insertable_text(text) {
-                    return;
-                }
-
-                if this.editor_component().search_active() {
-                    this.editor_component_mut().append_search_input(text);
-                    cx.stop_propagation();
-                    cx.notify();
-                } else if this.editor_component_mut().insert_text(text).is_ok() {
-                    cx.stop_propagation();
-                    cx.notify();
-                }
-            }),
-        )
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(
                 |this: &mut T, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<T>| {
-                    const LINE_HEIGHT: f32 = 22.0;
-                    const GUTTER_WIDTH: f32 = 64.0;
-                    const CHAR_WIDTH: f32 = 7.5; // approximate monospace character width
-
                     let focus_handle = this.editor_component().focus_handle().clone();
                     focus_handle.focus(window);
 
@@ -1036,9 +1237,9 @@ where
                         x,
                         editor_origin_y,
                         editor_origin_x,
-                        GUTTER_WIDTH,
-                        CHAR_WIDTH,
-                        LINE_HEIGHT,
+                        GUTTER_WIDTH_PX,
+                        CHAR_WIDTH_PX,
+                        LINE_HEIGHT_PX,
                         document.line_count,
                         |line| {
                             document
@@ -1057,8 +1258,15 @@ where
                 },
             ),
         )
-        .on_children_prepainted(move |children_bounds, _, _| {
-            *line_list_bounds.borrow_mut() = children_bounds.first().copied();
+        .on_children_prepainted(move |children_bounds, window, cx| {
+            if let Some(bounds) = children_bounds.first().copied() {
+                *line_list_bounds.borrow_mut() = Some(bounds);
+                window.handle_input(
+                    &focus_handle,
+                    ElementInputHandler::new(bounds, entity.clone()),
+                    cx,
+                );
+            }
         })
         .child(
             uniform_list(
@@ -1096,219 +1304,87 @@ where
         )
 }
 
-fn search_panel(document: &GpuiEditorDocument) -> impl IntoElement {
-    let query = if document.search_query.is_empty() {
-        "<none>".to_string()
-    } else {
-        document.search_query.clone()
-    };
-    let bg = if document.search_active {
-        rgb(0xfffbeb)
-    } else {
-        rgb(0xf8fafc)
-    };
+fn status_bar(document: &GpuiEditorDocument) -> impl IntoElement {
+    let cursor = format!(
+        "Ln {}, Col {}",
+        document.cursor.line + 1,
+        document.cursor.character + 1
+    );
+    let selection = (document.selection_summary != "<none>")
+        .then(|| format!("Sel {}", document.selection_summary));
+    let search = document
+        .search_active
+        .then(|| format!("Find {}", document.search_summary));
 
     div()
         .flex()
         .flex_row()
         .items_center()
-        .gap_2()
-        .px_4()
-        .py_2()
-        .bg(bg)
-        .border_b_1()
-        .border_color(rgb(0xd9e2ec))
-        .child(
-            div()
-                .w(px(88.0))
-                .text_color(rgb(0x64748b))
-                .text_size(px(11.0))
-                .child("Search"),
-        )
-        .child(
-            div()
-                .text_color(rgb(0x0f172a))
-                .child(format!("{query} | {}", document.search_summary)),
-        )
-}
-
-fn completion_panel(document: &GpuiEditorDocument) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_2()
-        .px_4()
-        .py_2()
+        .gap_3()
+        .px_3()
+        .py_1()
         .bg(rgb(0xf8fafc))
-        .border_b_1()
+        .border_t_1()
         .border_color(rgb(0xd9e2ec))
-        .child(
-            div()
-                .w(px(88.0))
-                .text_color(rgb(0x64748b))
-                .text_size(px(11.0))
-                .child("Completions"),
-        )
-        .when(document.completion_items.is_empty(), |this| {
-            this.child(div().text_color(rgb(0x64748b)).child("<none>"))
+        .text_color(rgb(0x475569))
+        .text_size(px(11.0))
+        .child(status_item(cursor))
+        .when_some(selection, |this, selection| {
+            this.child(status_item(selection))
         })
-        .children(
-            document
-                .completion_items
-                .iter()
-                .take(6)
-                .map(completion_item),
-        )
+        .child(status_item(format!("Path {}", document.current_yaml_path)))
+        .child(status_item(diagnostics_summary(document)))
+        .child(status_item(completion_summary(document)))
+        .when_some(search, |this, search| this.child(status_item(search)))
+        .child(status_item(chain_preview_summary(document)))
 }
 
-fn completion_popup_panel(document: &GpuiEditorDocument) -> impl IntoElement {
-    let anchor = document
-        .completion_popup
-        .as_ref()
-        .map(|popup| format!("{}:{}", popup.anchor_line, popup.anchor_column))
-        .unwrap_or_else(|| "<none>".to_string());
-
-    let items = document
-        .completion_popup
-        .as_ref()
-        .map(|popup| popup.items.iter().take(4).collect::<Vec<_>>())
-        .unwrap_or_default();
-
+fn status_item(text: String) -> impl IntoElement {
     div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap_2()
-        .px_4()
-        .py_2()
-        .bg(rgb(0xffffff))
-        .border_b_1()
-        .border_color(rgb(0xd9e2ec))
-        .child(
-            div()
-                .w(px(132.0))
-                .text_color(rgb(0x64748b))
-                .text_size(px(11.0))
-                .child(format!("Popup @ {anchor}")),
-        )
-        .when(items.is_empty(), |this| {
-            this.child(div().text_color(rgb(0x64748b)).child("<none>"))
-        })
-        .children(items.into_iter().map(completion_item))
+        .max_w(px(360.0))
+        .whitespace_nowrap()
+        .overflow_hidden()
+        .text_ellipsis()
+        .child(text)
 }
 
-fn chain_preview_section(document: &GpuiEditorDocument) -> impl IntoElement {
-    let (steps_text, status_text, status_color, message) =
-        if let Some(preview) = &document.chain_preview {
-            let steps = preview.steps.join(" -> ");
-            let status = match preview.status {
-                ProxyChainStatus::Complete => "Complete",
-                ProxyChainStatus::MissingReference => "MissingReference",
-                ProxyChainStatus::Cycle => "Cycle",
-            };
-            let color = match preview.status {
-                ProxyChainStatus::Complete => rgb(0x16a34a),
-                ProxyChainStatus::MissingReference => rgb(0xa16207),
-                ProxyChainStatus::Cycle => rgb(0xb42318),
-            };
-            let msg = preview.message.clone().unwrap_or_default();
-            (steps, status.to_string(), color, msg)
-        } else {
-            (
-                "<none>".to_string(),
-                String::new(),
-                rgb(0x64748b),
-                String::new(),
-            )
-        };
-
-    div()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .mb_4()
-        .child(label("Chain Preview"))
-        .child(
-            div()
-                .text_color(rgb(0x1f2937))
-                .line_height(px(18.0))
-                .child(steps_text),
-        )
-        .when(!status_text.is_empty(), |this| {
-            this.child(
-                div()
-                    .text_color(status_color)
-                    .text_size(px(12.0))
-                    .child(status_text),
-            )
-        })
-        .when(!message.is_empty(), |this| {
-            this.child(
-                div()
-                    .text_color(rgb(0x64748b))
-                    .text_size(px(11.0))
-                    .line_height(px(16.0))
-                    .child(message),
-            )
-        })
+fn diagnostics_summary(document: &GpuiEditorDocument) -> String {
+    if document.diagnostics.is_empty() {
+        "Diagnostics 0".to_string()
+    } else {
+        let errors = document
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == "error")
+            .count();
+        let warnings = document
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.severity == "warning")
+            .count();
+        format!("Diagnostics {errors} error, {warnings} warning")
+    }
 }
 
-fn inspector(document: &GpuiEditorDocument) -> impl IntoElement {
-    div()
-        .w(px(300.0))
-        .h_full()
-        .px_4()
-        .py_4()
-        .bg(rgb(0xf2f5f9))
-        .border_l_1()
-        .border_color(rgb(0xd9e2ec))
-        .child(section("Document", document.title.clone()))
-        .child(section("Path", document.path_display.clone()))
-        .child(section(
-            "Save",
-            format!(
-                "{} - {}",
-                if document.dirty { "dirty" } else { "clean" },
-                document.save_status
-            ),
-        ))
-        .child(section("YAML path", document.current_yaml_path.clone()))
-        .child(section(
-            "Cursor",
-            format!(
-                "{}:{}",
-                document.cursor.line + 1,
-                document.cursor.character + 1
-            ),
-        ))
-        .child(section("Selection", document.selection_summary.clone()))
-        .child(section(
-            "Completions",
-            if document.completion_labels.is_empty() {
-                "<none>".to_string()
-            } else {
-                document.completion_labels.join(", ")
-            },
-        ))
-        .child(section(
-            "Hover",
-            if document.hover_body.is_empty() {
-                document.hover_title.clone()
-            } else {
-                format!("{}\n{}", document.hover_title, document.hover_body)
-            },
-        ))
-        .child(chain_preview_section(document))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .mt_4()
-                .child(label("Diagnostics"))
-                .children(document.diagnostics.iter().map(diagnostic_row)),
-        )
+fn completion_summary(document: &GpuiEditorDocument) -> String {
+    if document.completion_items.is_empty() {
+        "Completions 0".to_string()
+    } else {
+        format!("Completions {}", document.completion_items.len())
+    }
+}
+
+fn chain_preview_summary(document: &GpuiEditorDocument) -> String {
+    let Some(preview) = &document.chain_preview else {
+        return "Chain <none>".to_string();
+    };
+
+    let status = match preview.status {
+        ProxyChainStatus::Complete => "complete",
+        ProxyChainStatus::MissingReference => "missing",
+        ProxyChainStatus::Cycle => "cycle",
+    };
+    format!("Chain {} ({status})", preview.steps.join(" -> "))
 }
 fn line_row(
     index: usize,
@@ -1587,90 +1663,6 @@ mod mouse_tests {
     }
 }
 
-fn section(title: &'static str, value: String) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .mb_4()
-        .child(label(title))
-        .child(
-            div()
-                .text_color(rgb(0x1f2937))
-                .line_height(px(18.0))
-                .child(value),
-        )
-}
-
-fn label(text: &'static str) -> impl IntoElement {
-    div()
-        .text_color(rgb(0x64748b))
-        .text_size(px(11.0))
-        .child(text)
-}
-
-fn diagnostic_row(diagnostic: &GpuiEditorDiagnostic) -> impl IntoElement {
-    let location = match (diagnostic.line, diagnostic.column) {
-        (Some(line), Some(column)) => format!(" at {line}:{column}"),
-        _ => String::new(),
-    };
-    div()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .p_2()
-        .bg(rgb(0xffffff))
-        .border_1()
-        .border_color(rgb(0xd9e2ec))
-        .child(
-            div()
-                .text_color(severity_color(&diagnostic.severity))
-                .child(format!(
-                    "{} {}{}",
-                    diagnostic.severity, diagnostic.code, location
-                )),
-        )
-        .child(
-            div()
-                .text_color(rgb(0x334155))
-                .line_height(px(18.0))
-                .child(diagnostic.message.clone()),
-        )
-}
-
-fn completion_item(completion: &GpuiEditorCompletion) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .px_2()
-        .py_1()
-        .bg(rgb(0xffffff))
-        .border_1()
-        .border_color(rgb(0xd9e2ec))
-        .child(
-            div()
-                .text_color(rgb(0x0f172a))
-                .child(format!("{} {}", completion.kind, completion.label)),
-        )
-        .child(
-            div()
-                .max_w(px(180.0))
-                .text_color(rgb(0x64748b))
-                .text_size(px(11.0))
-                .line_height(px(14.0))
-                .whitespace_nowrap()
-                .overflow_hidden()
-                .text_ellipsis()
-                .child(
-                    completion
-                        .documentation
-                        .clone()
-                        .unwrap_or_else(|| "<no docs>".to_string()),
-                ),
-        )
-}
-
 fn build_completion_popup(
     cursor: TextPosition,
     completion_items: &[GpuiEditorCompletion],
@@ -1803,6 +1795,57 @@ fn text_position_at_byte_index(text: &str, target_byte_index: usize) -> TextPosi
     TextPosition::new(line, character)
 }
 
+fn ordered_text_range(range: TextRange) -> TextRange {
+    if range.start <= range.end {
+        range
+    } else {
+        TextRange::new(range.end, range.start)
+    }
+}
+
+fn position_after_insert(start: TextPosition, text: &str) -> TextPosition {
+    let mut line = start.line;
+    let mut character = start.character;
+
+    for ch in text.chars() {
+        if ch == '\n' {
+            line += 1;
+            character = 0;
+        } else {
+            character += 1;
+        }
+    }
+
+    TextPosition::new(line, character)
+}
+
+fn position_after_utf16_prefix(
+    start: TextPosition,
+    text: &str,
+    target_utf16: usize,
+) -> TextPosition {
+    let mut line = start.line;
+    let mut character = start.character;
+    let mut utf16_index = 0usize;
+
+    for ch in text.chars() {
+        let width = ch.len_utf16();
+        if utf16_index + width > target_utf16 {
+            break;
+        }
+
+        utf16_index += width;
+        if ch == '\n' {
+            line += 1;
+            character = 0;
+        } else {
+            character += 1;
+        }
+    }
+
+    TextPosition::new(line, character)
+}
+
 fn format_selection_range(range: TextRange) -> String {
     let (start, end) = if range.start <= range.end {
         (range.start, range.end)
@@ -1880,11 +1923,4 @@ fn split_at_character(text: &str, character: u32) -> (String, String) {
         .map(|(index, _)| index)
         .unwrap_or(text.len());
     (text[..split_at].to_string(), text[split_at..].to_string())
-}
-
-fn is_insertable_text(text: &str) -> bool {
-    !text.is_empty()
-        && text
-            .chars()
-            .all(|ch| ch == '\n' || ch == '\t' || !ch.is_control())
 }
