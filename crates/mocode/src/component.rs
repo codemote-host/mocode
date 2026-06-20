@@ -44,6 +44,9 @@ actions!(
         Right,
         SelectLeft,
         SelectRight,
+        SelectAll,
+        SelectLineStart,
+        SelectLineEnd,
         Up,
         Down,
         SelectUp,
@@ -314,6 +317,14 @@ impl GpuiEditorDocument {
         Ok(())
     }
 
+    pub(crate) fn select_all(&mut self) -> Result<(), EditorError> {
+        self.selection_anchor = Some(TextPosition::new(0, 0));
+        self.cursor = self.document_end_position();
+        self.ime_marked_range = None;
+        self.refresh_derived();
+        Ok(())
+    }
+
     pub(crate) const PAGE_LINES: u32 = 25;
 
     pub(crate) fn move_up(&mut self) -> Result<(), EditorError> {
@@ -340,6 +351,20 @@ impl GpuiEditorDocument {
     pub(crate) fn move_line_end(&mut self) -> Result<(), EditorError> {
         self.cursor = self.editor.move_line_end(self.cursor)?;
         self.clear_selection();
+        self.refresh_derived();
+        Ok(())
+    }
+
+    pub(crate) fn select_line_start(&mut self) -> Result<(), EditorError> {
+        self.ensure_selection_anchor();
+        self.cursor = self.editor.move_line_start(self.cursor)?;
+        self.refresh_derived();
+        Ok(())
+    }
+
+    pub(crate) fn select_line_end(&mut self) -> Result<(), EditorError> {
+        self.ensure_selection_anchor();
+        self.cursor = self.editor.move_line_end(self.cursor)?;
         self.refresh_derived();
         Ok(())
     }
@@ -838,6 +863,13 @@ impl GpuiEditorDocument {
         self.selection_anchor = None;
     }
 
+    fn document_end_position(&self) -> TextPosition {
+        let last_line = self.editor.line_count().saturating_sub(1);
+        self.editor
+            .line_end_position(last_line)
+            .unwrap_or_else(|| TextPosition::new(0, 0))
+    }
+
     fn delete_selected_text(&mut self) -> Result<bool, EditorError> {
         let Some(range) = self.selected_range().map(ordered_text_range) else {
             return Ok(false);
@@ -997,6 +1029,11 @@ impl GpuiEditorComponent {
         self.reveal_if_ok(result)
     }
 
+    fn select_all(&mut self) -> Result<(), EditorError> {
+        let result = self.document.select_all();
+        self.reveal_if_ok(result)
+    }
+
     fn move_up(&mut self) -> Result<(), EditorError> {
         let result = self.document.move_up();
         self.reveal_if_ok(result)
@@ -1014,6 +1051,16 @@ impl GpuiEditorComponent {
 
     fn move_line_end(&mut self) -> Result<(), EditorError> {
         let result = self.document.move_line_end();
+        self.reveal_if_ok(result)
+    }
+
+    fn select_line_start(&mut self) -> Result<(), EditorError> {
+        let result = self.document.select_line_start();
+        self.reveal_if_ok(result)
+    }
+
+    fn select_line_end(&mut self) -> Result<(), EditorError> {
+        let result = self.document.select_line_end();
         self.reveal_if_ok(result)
     }
 
@@ -1125,12 +1172,16 @@ pub(crate) fn bind_editor_keys(cx: &mut App) {
         KeyBinding::new("right", Right, Some("MocodeEditor")),
         KeyBinding::new("shift-left", SelectLeft, Some("MocodeEditor")),
         KeyBinding::new("shift-right", SelectRight, Some("MocodeEditor")),
+        KeyBinding::new("cmd-a", SelectAll, Some("MocodeEditor")),
+        KeyBinding::new("ctrl-a", SelectAll, Some("MocodeEditor")),
         KeyBinding::new("up", Up, Some("MocodeEditor")),
         KeyBinding::new("down", Down, Some("MocodeEditor")),
         KeyBinding::new("shift-up", SelectUp, Some("MocodeEditor")),
         KeyBinding::new("shift-down", SelectDown, Some("MocodeEditor")),
         KeyBinding::new("home", Home, Some("MocodeEditor")),
         KeyBinding::new("end", End, Some("MocodeEditor")),
+        KeyBinding::new("shift-home", SelectLineStart, Some("MocodeEditor")),
+        KeyBinding::new("shift-end", SelectLineEnd, Some("MocodeEditor")),
         KeyBinding::new("pageup", PageUp, Some("MocodeEditor")),
         KeyBinding::new("pagedown", PageDown, Some("MocodeEditor")),
         KeyBinding::new("cmd-v", Paste, Some("MocodeEditor")),
@@ -1261,6 +1312,13 @@ where
             }),
         )
         .on_action(
+            cx.listener(|this: &mut T, _: &SelectAll, _: &mut Window, cx| {
+                if this.editor_component_mut().select_all().is_ok() {
+                    cx.notify();
+                }
+            }),
+        )
+        .on_action(
             cx.listener(|this: &mut T, _: &Open, window: &mut Window, cx| {
                 this.open_document(window, cx);
                 cx.notify();
@@ -1328,6 +1386,20 @@ where
                 cx.notify();
             }
         }))
+        .on_action(
+            cx.listener(|this: &mut T, _: &SelectLineStart, _: &mut Window, cx| {
+                if this.editor_component_mut().select_line_start().is_ok() {
+                    cx.notify();
+                }
+            }),
+        )
+        .on_action(
+            cx.listener(|this: &mut T, _: &SelectLineEnd, _: &mut Window, cx| {
+                if this.editor_component_mut().select_line_end().is_ok() {
+                    cx.notify();
+                }
+            }),
+        )
         .on_action(cx.listener(|this: &mut T, _: &PageUp, _: &mut Window, cx| {
             if this.editor_component_mut().page_up().is_ok() {
                 cx.notify();

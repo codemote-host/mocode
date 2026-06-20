@@ -533,6 +533,54 @@ mod tests {
     }
 
     #[test]
+    fn select_all_selects_entire_document() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "mixed-port: 7890\ndns:\n  enable: true\n",
+            TextPosition::new(1, 2),
+        );
+
+        document.select_all().unwrap();
+
+        assert_eq!(
+            document.selected_text().unwrap(),
+            "mixed-port: 7890\ndns:\n  enable: true\n"
+        );
+        assert_eq!(document.cursor, TextPosition::new(3, 0));
+        assert_eq!(document.selection_summary, "1:1 -> 4:1");
+    }
+
+    #[test]
+    fn shift_home_selects_to_line_start() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enable: true\n",
+            TextPosition::new(1, 8),
+        );
+
+        document.select_line_start().unwrap();
+
+        assert_eq!(document.selected_text().unwrap(), "  enable");
+        assert_eq!(document.cursor, TextPosition::new(1, 0));
+        assert_eq!(document.selection_summary, "2:1 -> 2:9");
+    }
+
+    #[test]
+    fn shift_end_selects_to_line_end() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enable: true\n",
+            TextPosition::new(1, 2),
+        );
+
+        document.select_line_end().unwrap();
+
+        assert_eq!(document.selected_text().unwrap(), "enable: true");
+        assert_eq!(document.cursor, TextPosition::new(1, 14));
+        assert_eq!(document.selection_summary, "2:3 -> 2:15");
+    }
+
+    #[test]
     fn mouse_drag_selection_selects_forward_text() {
         let mut document = GpuiEditorDocument::from_text(
             "scratch.yaml",
@@ -606,6 +654,18 @@ mod tests {
         assert!(component_source.contains("UniformListScrollHandle"));
         assert!(component_source.contains("reveal_cursor"));
         assert!(component_source.contains(".track_scroll(scroll_handle)"));
+    }
+
+    #[test]
+    fn editor_surface_wires_common_selection_shortcuts() {
+        let component_source = include_str!("component.rs");
+
+        assert!(component_source.contains("SelectAll"));
+        assert!(component_source.contains("SelectLineStart"));
+        assert!(component_source.contains("SelectLineEnd"));
+        assert!(component_source.contains("ctrl-a"));
+        assert!(component_source.contains("shift-home"));
+        assert!(component_source.contains("shift-end"));
     }
 
     #[test]
