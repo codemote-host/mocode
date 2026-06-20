@@ -346,6 +346,43 @@ mod tests {
     }
 
     #[test]
+    fn undo_redo_updates_demo_state_and_clears_selection() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enhanced-mode: \n",
+            TextPosition::new(1, 16),
+        );
+
+        document.select_right().unwrap();
+        assert!(document.selected_text().is_some());
+
+        document.insert_text("fake-ip").unwrap();
+        assert_eq!(document.cursor, TextPosition::new(1, 24));
+        assert_eq!(
+            document.line_at(1).unwrap().text,
+            "  enhanced-mode: fake-ip"
+        );
+        assert!(document.dirty);
+        assert_eq!(document.selection_summary, "<none>");
+
+        document.select_left().unwrap();
+        assert!(document.selected_text().is_some());
+
+        document.undo().unwrap();
+        assert_eq!(document.cursor, TextPosition::new(1, 17));
+        assert_eq!(document.line_at(1).unwrap().text, "  enhanced-mode: ");
+        assert!(document.dirty);
+        assert_eq!(document.selection_summary, "<none>");
+
+        document.redo().unwrap();
+        assert_eq!(document.cursor, TextPosition::new(1, 24));
+        assert_eq!(
+            document.line_at(1).unwrap().text,
+            "  enhanced-mode: fake-ip"
+        );
+    }
+
+    #[test]
     fn selection_copy_uses_shared_core_range() {
         let mut document = GpuiEditorDocument::from_text(
             "scratch.yaml",

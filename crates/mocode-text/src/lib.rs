@@ -73,15 +73,27 @@ pub enum TextEditError {
     ReversedRange(TextRange),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EditHistoryEntry {
+    undo: TextEdit,
+    redo: TextEdit,
+    undo_cursor: TextPosition,
+    redo_cursor: TextPosition,
+}
+
 #[derive(Debug, Clone)]
 pub struct TextBuffer {
     rope: Rope,
+    undo_stack: Vec<EditHistoryEntry>,
+    redo_stack: Vec<EditHistoryEntry>,
 }
 
 impl TextBuffer {
     pub fn open_text(text: impl AsRef<str>) -> Self {
         Self {
             rope: Rope::from_str(text.as_ref()),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
     }
 
@@ -117,10 +129,41 @@ impl TextBuffer {
     }
 
     pub fn apply_edit(&mut self, edit: TextEdit) -> Result<(), TextEditError> {
-        let range = self.char_range(edit.range)?;
-        self.rope.remove(range.clone());
-        self.rope.insert(range.start, &edit.replacement);
+        if let Some(history) = self.apply_edit_recording(edit)? {
+            self.undo_stack.push(history);
+            self.redo_stack.clear();
+        }
         Ok(())
+    }
+
+    pub fn undo(&mut self) -> Result<Option<TextPosition>, TextEditError> {
+        let Some(history) = self.undo_stack.pop() else {
+            return Ok(None);
+        };
+
+        if let Err(error) = self.apply_edit_untracked(&history.undo) {
+            self.undo_stack.push(history);
+            return Err(error);
+        }
+
+        let cursor = history.undo_cursor;
+        self.redo_stack.push(history);
+        Ok(Some(cursor))
+    }
+
+    pub fn redo(&mut self) -> Result<Option<TextPosition>, TextEditError> {
+        let Some(history) = self.redo_stack.pop() else {
+            return Ok(None);
+        };
+
+        if let Err(error) = self.apply_edit_untracked(&history.redo) {
+            self.redo_stack.push(history);
+            return Err(error);
+        }
+
+        let cursor = history.redo_cursor;
+        self.undo_stack.push(history);
+        Ok(Some(cursor))
     }
 
     pub fn char_index(&self, position: TextPosition) -> Result<usize, TextEditError> {
@@ -298,6 +341,39 @@ impl TextBuffer {
             TextRange::new(range.end, range.start)
         }
     }
+
+    fn apply_edit_recording(
+        &mut self,
+        edit: TextEdit,
+    ) -> Result<Option<EditHistoryEntry>, TextEditError> {
+        let range = self.char_range(edit.range)?;
+        let removed_text = self.rope.slice(range.clone()).to_string();
+        if removed_text.is_empty() && edit.replacement.is_empty() {
+            return Ok(None);
+        }
+
+        let redo_cursor = position_after_insert(edit.range.start, &edit.replacement);
+        let undo_range = TextRange::new(edit.range.start, redo_cursor);
+        let undo_cursor = position_after_insert(edit.range.start, &removed_text);
+        let undo = TextEdit::replace(undo_range, removed_text);
+
+        self.rope.remove(range.clone());
+        self.rope.insert(range.start, &edit.replacement);
+
+        Ok(Some(EditHistoryEntry {
+            undo,
+            redo: edit,
+            undo_cursor,
+            redo_cursor,
+        }))
+    }
+
+    fn apply_edit_untracked(&mut self, edit: &TextEdit) -> Result<(), TextEditError> {
+        let range = self.char_range(edit.range)?;
+        self.rope.remove(range.clone());
+        self.rope.insert(range.start, &edit.replacement);
+        Ok(())
+    }
 }
 
 fn strip_line_ending(mut line: String) -> String {
@@ -409,6 +485,58 @@ mod tests {
         let cursor = buffer.delete_at(TextPosition::new(0, 4)).unwrap();
         assert_eq!(buffer.as_string(), "dns: enable: true\n");
         assert_eq!(cursor, TextPosition::new(0, 4));
+    }
+
+    #[test]
+    fn undo_redo_restores_inserted_text_and_cursor() {
+        let mut buffer = TextBuffer::open_text("dns:\n");
+
+        let cursor = buffer
+            .insert_text_at(TextPosition::new(0, 4), "\n  enable: true")
+            .unwrap();
+        assert_eq!(cursor, TextPosition::new(1, 14));
+        assert_eq!(buffer.as_string(), "dns:\n  enable: true\n");
+
+        let undo_cursor = buffer.undo().unwrap();
+        assert_eq!(undo_cursor, Some(TextPosition::new(0, 4)));
+        assert_eq!(buffer.as_string(), "dns:\n");
+
+        let redo_cursor = buffer.redo().unwrap();
+        assert_eq!(redo_cursor, Some(TextPosition::new(1, 14)));
+        assert_eq!(buffer.as_string(), "dns:\n  enable: true\n");
+    }
+
+    #[test]
+    fn undo_redo_restores_deleted_text_and_cursor() {
+        let mut buffer = TextBuffer::open_text("dns:\n  enable: true\n");
+
+        let cursor = buffer.backspace_at(TextPosition::new(1, 2)).unwrap();
+        assert_eq!(cursor, TextPosition::new(1, 1));
+        assert_eq!(buffer.as_string(), "dns:\n enable: true\n");
+
+        let undo_cursor = buffer.undo().unwrap();
+        assert_eq!(undo_cursor, Some(TextPosition::new(1, 2)));
+        assert_eq!(buffer.as_string(), "dns:\n  enable: true\n");
+
+        let redo_cursor = buffer.redo().unwrap();
+        assert_eq!(redo_cursor, Some(TextPosition::new(1, 1)));
+        assert_eq!(buffer.as_string(), "dns:\n enable: true\n");
+    }
+
+    #[test]
+    fn new_edit_after_undo_clears_redo_history() {
+        let mut buffer = TextBuffer::open_text("abc\n");
+
+        buffer.insert_text_at(TextPosition::new(0, 3), "d").unwrap();
+        assert_eq!(buffer.as_string(), "abcd\n");
+
+        assert_eq!(buffer.undo().unwrap(), Some(TextPosition::new(0, 3)));
+        assert_eq!(buffer.as_string(), "abc\n");
+
+        buffer.insert_text_at(TextPosition::new(0, 3), "x").unwrap();
+        assert_eq!(buffer.as_string(), "abcx\n");
+        assert_eq!(buffer.redo().unwrap(), None);
+        assert_eq!(buffer.as_string(), "abcx\n");
     }
 
     #[test]

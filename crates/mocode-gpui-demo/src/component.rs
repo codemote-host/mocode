@@ -34,7 +34,9 @@ actions!(
         PageDown,
         Paste,
         Copy,
-        Save
+        Save,
+        Undo,
+        Redo
     ]
 );
 
@@ -185,6 +187,26 @@ impl GpuiEditorDocument {
         self.clear_selection();
         self.mark_dirty();
         self.refresh_derived();
+        Ok(())
+    }
+
+    pub(crate) fn undo(&mut self) -> Result<(), EditorError> {
+        if let Some(cursor) = self.editor.undo()? {
+            self.cursor = cursor;
+            self.clear_selection();
+            self.mark_dirty();
+            self.refresh_derived();
+        }
+        Ok(())
+    }
+
+    pub(crate) fn redo(&mut self) -> Result<(), EditorError> {
+        if let Some(cursor) = self.editor.redo()? {
+            self.cursor = cursor;
+            self.clear_selection();
+            self.mark_dirty();
+            self.refresh_derived();
+        }
         Ok(())
     }
 
@@ -458,6 +480,14 @@ impl GpuiEditorComponent {
         self.document.delete()
     }
 
+    fn undo(&mut self) -> Result<(), EditorError> {
+        self.document.undo()
+    }
+
+    fn redo(&mut self) -> Result<(), EditorError> {
+        self.document.redo()
+    }
+
     fn move_left(&mut self) -> Result<(), EditorError> {
         self.document.move_left()
     }
@@ -542,6 +572,11 @@ pub(crate) fn bind_editor_keys(cx: &mut App) {
         KeyBinding::new("ctrl-c", Copy, Some("MocodeEditor")),
         KeyBinding::new("cmd-s", Save, Some("MocodeEditor")),
         KeyBinding::new("ctrl-s", Save, Some("MocodeEditor")),
+        KeyBinding::new("cmd-z", Undo, Some("MocodeEditor")),
+        KeyBinding::new("ctrl-z", Undo, Some("MocodeEditor")),
+        KeyBinding::new("cmd-shift-z", Redo, Some("MocodeEditor")),
+        KeyBinding::new("ctrl-shift-z", Redo, Some("MocodeEditor")),
+        KeyBinding::new("ctrl-y", Redo, Some("MocodeEditor")),
     ]);
 }
 
@@ -589,6 +624,16 @@ where
         )
         .on_action(cx.listener(|this: &mut T, _: &Delete, _: &mut Window, cx| {
             if this.editor_component_mut().delete().is_ok() {
+                cx.notify();
+            }
+        }))
+        .on_action(cx.listener(|this: &mut T, _: &Undo, _: &mut Window, cx| {
+            if this.editor_component_mut().undo().is_ok() {
+                cx.notify();
+            }
+        }))
+        .on_action(cx.listener(|this: &mut T, _: &Redo, _: &mut Window, cx| {
+            if this.editor_component_mut().redo().is_ok() {
                 cx.notify();
             }
         }))

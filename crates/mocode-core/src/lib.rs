@@ -140,6 +140,22 @@ impl MocodeEditor {
         Ok(cursor)
     }
 
+    pub fn undo(&mut self) -> Result<Option<TextPosition>, EditorError> {
+        let cursor = self.text.undo()?;
+        if cursor.is_some() {
+            self.refresh_indexes();
+        }
+        Ok(cursor)
+    }
+
+    pub fn redo(&mut self) -> Result<Option<TextPosition>, EditorError> {
+        let cursor = self.text.redo()?;
+        if cursor.is_some() {
+            self.refresh_indexes();
+        }
+        Ok(cursor)
+    }
+
     pub fn format(&self) -> Result<String, EditorError> {
         Ok(self.text.as_string())
     }
@@ -764,6 +780,52 @@ mod tests {
             .unwrap();
 
         assert_eq!(cursor, TextPosition::new(3, 0));
+        assert!(
+            editor
+                .diagnostics()
+                .iter()
+                .all(|diagnostic| diagnostic.code != "mihomo.reference.missing")
+        );
+    }
+
+    #[test]
+    fn undo_redo_through_core_recomputes_semantics() {
+        let mut editor = MocodeEditor::open_text(
+            "proxy-groups:\n  - name: Proxy\n    type: select\n    proxies:\n      - missing\n",
+        );
+
+        assert!(
+            editor
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "mihomo.reference.missing")
+        );
+
+        let cursor = editor
+            .insert_text_at(
+                TextPosition::new(0, 0),
+                "proxies:\n  - name: missing\n    type: ss\n",
+            )
+            .unwrap();
+        assert_eq!(cursor, TextPosition::new(3, 0));
+        assert!(
+            editor
+                .diagnostics()
+                .iter()
+                .all(|diagnostic| diagnostic.code != "mihomo.reference.missing")
+        );
+
+        let undo_cursor = editor.undo().unwrap();
+        assert_eq!(undo_cursor, Some(TextPosition::new(0, 0)));
+        assert!(
+            editor
+                .diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.code == "mihomo.reference.missing")
+        );
+
+        let redo_cursor = editor.redo().unwrap();
+        assert_eq!(redo_cursor, Some(TextPosition::new(3, 0)));
         assert!(
             editor
                 .diagnostics()
