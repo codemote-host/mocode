@@ -2,7 +2,7 @@
 
 ## Product Definition
 
-mocode is a reusable Mihomo Config Editor Component written in Rust. It provides a UI-independent editing core and Mihomo semantic services for YAML configuration files.
+mocode is a reusable Mihomo Config Editor Component written in Rust. It provides a UI-independent editing core and Mihomo semantic services for YAML configuration files, with a GPUI application shell as the current user-facing target.
 
 The primary users are:
 
@@ -12,24 +12,26 @@ The primary users are:
 
 ## Functional Scope
 
-Phase 1 core scope:
+Core scope:
 
 - Open text into a rope-backed document.
 - Apply text edits.
 - Parse YAML and report syntax errors.
 - Compute current YAML path.
 - Provide Mihomo field docs and enum completions.
-- Build a semantic index for proxies, groups, providers, rule providers, rules, and dialer-proxy references.
+- Build a semantic index for proxies, groups, providers, rule providers, rules, and `dialer-proxy` references.
 - Report missing references and obvious cycle diagnostics.
+- Provide viewport line slices for large files.
 
-Prototype UI scope:
+Application scope:
 
+- open/save YAML files
 - line numbers, cursor, selection, copy/paste, undo/redo baseline
 - syntax highlighting and diagnostics rendering
 - completion popup and hover popup
 - right-side path and proxy-chain panels
-- 5000-20000 line file loading and scrolling evaluation
-- Chinese IME evaluation
+- 5000-20000 line file loading and scrolling validation
+- Chinese IME validation
 
 ## Non-goals
 
@@ -48,6 +50,8 @@ Prototype UI scope:
 impl MocodeEditor {
     pub fn open_text(text: impl Into<String>) -> Self;
     pub fn apply_edit(&mut self, edit: TextEdit) -> Result<(), EditorError>;
+    pub fn undo(&mut self) -> Result<bool, EditorError>;
+    pub fn redo(&mut self) -> Result<bool, EditorError>;
     pub fn format(&self) -> Result<String, EditorError>;
     pub fn diagnostics(&self) -> Vec<Diagnostic>;
     pub fn completions_at(&self, position: TextPosition) -> Vec<Completion>;
@@ -60,7 +64,7 @@ impl MocodeEditor {
 }
 ```
 
-The API must remain UI-independent. UI adapters pass text edits and positions into `mocode-core`; they do not parse Mihomo semantics.
+The API must remain UI-independent. The app passes text edits and positions into `mocode-core`; it does not parse Mihomo semantics.
 
 ## Semantic Model
 
@@ -146,23 +150,24 @@ Formatting is conservative:
 - Normalize simple indentation only when a range can be rewritten safely.
 - Whole-document format is opt-in and should remain unavailable until a lossless strategy is proven.
 
-## Prototype Acceptance
+## App Acceptance
 
-Both GPUI and Floem demos must use the same `mocode-core` API and meet the same checklist:
+The `mocode` app must use `mocode-core` for all semantic behavior and meet this checklist:
 
 1. Load 5000-20000 line Mihomo YAML.
 2. Smooth scrolling.
 3. Line numbers.
 4. Cursor movement, text selection, copy, and paste.
-5. Chinese IME test.
-6. YAML syntax error rendering.
-7. Hover docs on Mihomo fields.
-8. Field-name completion.
-9. Completion in `proxy-groups.proxies`.
-10. Completion in `dialer-proxy`.
-11. Missing reference diagnostics.
-12. `dialer-proxy` cycle diagnostics.
-13. Right-side current YAML path panel.
-14. Right-side chain preview panel: local -> entry node -> intermediate node -> exit node -> target.
-15. No copied business logic between demos.
-
+5. Undo and redo.
+6. Save edited YAML.
+7. Chinese IME test.
+8. YAML syntax error rendering.
+9. Hover docs on Mihomo fields.
+10. Field-name completion.
+11. Completion in `proxy-groups.proxies`.
+12. Completion in `dialer-proxy`.
+13. Missing reference diagnostics.
+14. `dialer-proxy` cycle diagnostics.
+15. Right-side current YAML path panel.
+16. Right-side chain preview panel: local -> entry node -> intermediate node -> exit node -> target.
+17. No Mihomo business logic inside the app crate.

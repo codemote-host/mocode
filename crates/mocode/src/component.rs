@@ -309,6 +309,7 @@ impl GpuiEditorDocument {
         self.editor.text()
     }
 
+    #[cfg(test)]
     pub(crate) fn line_at(&self, index: usize) -> Option<GpuiEditorLine> {
         let lines = self.editor.semantic_lines_in_range(index, index + 1);
         lines.into_iter().next().map(|line| GpuiEditorLine {

@@ -8,7 +8,7 @@ const INSPECT_POSITION: TextPosition = TextPosition::new(10, 17);
 pub(crate) const DEFAULT_FIXTURE_ID: &str = "dialer-proxy";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct DemoFixture {
+pub(crate) struct AppFixture {
     pub(crate) id: &'static str,
     pub(crate) label: &'static str,
     pub(crate) title: &'static str,
@@ -16,78 +16,78 @@ pub(crate) struct DemoFixture {
     pub(crate) inspect_position: TextPosition,
 }
 
-const DEMO_FIXTURES: &[DemoFixture] = &[
-    DemoFixture {
+const APP_FIXTURES: &[AppFixture] = &[
+    AppFixture {
         id: "dialer-proxy",
         label: "Dialer",
         title: SAMPLE_TITLE,
         text: SAMPLE_TEXT,
         inspect_position: INSPECT_POSITION,
     },
-    DemoFixture {
+    AppFixture {
         id: "minimal",
         label: "Minimal",
         title: "examples/configs/minimal.yaml",
         text: include_str!("../../../examples/configs/minimal.yaml"),
         inspect_position: TextPosition::new(0, 0),
     },
-    DemoFixture {
+    AppFixture {
         id: "dns",
         label: "DNS",
         title: "examples/configs/dns.yaml",
         text: include_str!("../../../examples/configs/dns.yaml"),
         inspect_position: TextPosition::new(2, 16),
     },
-    DemoFixture {
+    AppFixture {
         id: "tun",
         label: "TUN",
         title: "examples/configs/tun.yaml",
         text: include_str!("../../../examples/configs/tun.yaml"),
         inspect_position: TextPosition::new(2, 4),
     },
-    DemoFixture {
+    AppFixture {
         id: "proxy-groups",
         label: "Groups",
         title: "examples/configs/proxy-groups.yaml",
         text: include_str!("../../../examples/configs/proxy-groups.yaml"),
         inspect_position: TextPosition::new(7, 8),
     },
-    DemoFixture {
+    AppFixture {
         id: "providers",
         label: "Providers",
         title: "examples/configs/providers.yaml",
         text: include_str!("../../../examples/configs/providers.yaml"),
         inspect_position: TextPosition::new(0, 0),
     },
-    DemoFixture {
+    AppFixture {
         id: "invalid-yaml",
         label: "Bad YAML",
         title: "examples/configs/invalid-yaml.yaml",
         text: include_str!("../../../examples/configs/invalid-yaml.yaml"),
         inspect_position: TextPosition::new(2, 0),
     },
-    DemoFixture {
+    AppFixture {
         id: "invalid-reference",
         label: "Bad Ref",
         title: "examples/configs/invalid-reference.yaml",
         text: include_str!("../../../examples/configs/invalid-reference.yaml"),
         inspect_position: TextPosition::new(0, 0),
     },
-    DemoFixture {
+    AppFixture {
         id: "dialer-cycle",
         label: "Cycle",
         title: "tests/fixtures/dialer-cycle.yaml",
         text: include_str!("../../../tests/fixtures/dialer-cycle.yaml"),
         inspect_position: TextPosition::new(0, 0),
     },
-    DemoFixture {
+    AppFixture {
         id: "large",
         label: "Large",
         title: "examples/configs/large.yaml",
         text: include_str!("../../../examples/configs/large.yaml"),
         inspect_position: TextPosition::new(0, 0),
     },
-    DemoFixture {
+    AppFixture {
         id: "large-20000",
         label: "20k",
         title: "examples/configs/large-20000.yaml",
@@ -96,19 +96,19 @@ const DEMO_FIXTURES: &[DemoFixture] = &[
     },
 ];
 
-pub(crate) fn all_fixtures() -> &'static [DemoFixture] {
-    DEMO_FIXTURES
+pub(crate) fn all_fixtures() -> &'static [AppFixture] {
+    APP_FIXTURES
 }
 
-pub(crate) fn default_fixture() -> &'static DemoFixture {
+pub(crate) fn default_fixture() -> &'static AppFixture {
     fixture_by_id(DEFAULT_FIXTURE_ID).expect("default fixture must exist")
 }
 
-pub(crate) fn fixture_by_id(id: &str) -> Option<&'static DemoFixture> {
-    DEMO_FIXTURES.iter().find(|fixture| fixture.id == id)
+pub(crate) fn fixture_by_id(id: &str) -> Option<&'static AppFixture> {
+    APP_FIXTURES.iter().find(|fixture| fixture.id == id)
 }
 
-pub(crate) fn document_from_fixture(fixture: &DemoFixture) -> GpuiEditorDocument {
+pub(crate) fn document_from_fixture(fixture: &AppFixture) -> GpuiEditorDocument {
     GpuiEditorDocument::from_text(fixture.title, fixture.text, fixture.inspect_position)
 }
 

@@ -2,8 +2,7 @@
 members = [
     "crates/mocode-api",
     "crates/mocode-core",
-    "crates/mocode-floem-demo",
-    "crates/mocode-gpui-demo",
+    "crates/mocode",
     "crates/mocode-mihomo-lint",
     "crates/mocode-mihomo-schema",
     "crates/mocode-text",
@@ -18,4 +17,3 @@ rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 authors = ["mocode contributors"]
 description = "Mihomo Config Editor Component"
-

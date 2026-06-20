@@ -4,20 +4,23 @@
 
 ```text
 crates/
+  mocode/
   mocode-text/
   mocode-yaml/
   mocode-mihomo-schema/
   mocode-mihomo-lint/
   mocode-core/
   mocode-api/
-  mocode-gpui-demo/
-  mocode-floem-demo/
 examples/configs/
 tests/fixtures/
 docs/
 ```
 
 ## Crate Design
+
+### mocode
+
+GPUI application shell and component adapter. It owns rendering, keyboard input, focus, clipboard, scrolling, popups, side panels, open/save UX, and app-window integration. It must not own Mihomo semantic rules.
 
 ### mocode-text
 
@@ -28,7 +31,7 @@ Owns text primitives:
 - `TextRange`
 - `TextEdit`
 - cursor and selection primitives
-- future undo/redo operation log
+- undo/redo operation history
 
 It may depend on `ropey`. It must not depend on YAML, Mihomo schema, or UI crates.
 
@@ -87,36 +90,32 @@ It must not depend on any UI crate.
 
 Public facade for host applications. It re-exports stable API types and hides crate layout churn.
 
-### mocode-gpui-demo and mocode-floem-demo
-
-UI adapters only. They can own rendering, input, focus, scrolling, popups, side panels, and platform integration. They must not own Mihomo semantic rules.
-
 ## Data Flow
 
 ```text
 User input
-  -> UI adapter
+  -> mocode app adapter
   -> TextEdit
   -> mocode-core.apply_edit
   -> mocode-text updates Rope
-  -> mocode-yaml incremental parse
+  -> mocode-yaml parses YAML
   -> mocode-mihomo-lint rebuilds affected semantic index
-  -> mocode-core publishes snapshot
-  -> UI adapter renders text, diagnostics, hover, completions, path, chain
+  -> mocode-core publishes derived state
+  -> mocode app renders text, diagnostics, hover, completions, path, chain
 ```
 
 ## Edit Event Flow
 
-1. UI adapter converts keypress, paste, IME commit, or command into `TextEdit`.
+1. The app converts keypress, paste, IME commit, or command into `TextEdit`.
 2. `mocode-core` validates and applies the edit to `TextBuffer`.
-3. `mocode-yaml` receives the edit range and reparses incrementally.
-4. Semantic index is rebuilt incrementally later; phase 1 may rebuild whole-file for simplicity.
-5. Diagnostics and completion caches are invalidated.
-6. UI adapter requests the updated viewport and semantic overlays.
+3. `mocode-yaml` receives the current text and parses it.
+4. Semantic index is rebuilt whole-file for now; later work can make this incremental.
+5. Diagnostics and completion caches are refreshed.
+6. The app requests updated viewport lines and semantic overlays.
 
 ## YAML Parse Flow
 
-Phase 1:
+Current:
 
 ```text
 text -> tree-sitter-yaml -> syntax tree -> YAML path walker -> syntax errors
@@ -153,7 +152,7 @@ The index stores source ranges for names and references. Provider remote content
 
 ## UI Adapter Design
 
-The UI adapter receives a plain API:
+The app receives a plain API:
 
 - current text snapshot
 - visible line slices
@@ -163,7 +162,7 @@ The UI adapter receives a plain API:
 - YAML path
 - proxy chain preview
 
-The adapter owns:
+The app owns:
 
 - text layout and painting
 - scrolling and virtualization
@@ -173,10 +172,9 @@ The adapter owns:
 - popup placement
 - platform windows
 
-The adapter does not:
+The app does not:
 
 - parse YAML
 - know Mihomo field rules
 - resolve references
 - detect `dialer-proxy` cycles
-

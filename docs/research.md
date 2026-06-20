@@ -2,7 +2,7 @@
 
 ## Summary
 
-mocode should be built as a UI-independent editor core with a Mihomo-aware semantic layer, then rendered through GPUI and Floem adapters. The core technical route is:
+mocode should be built as a UI-independent editor core with a Mihomo-aware semantic layer, then rendered through the `mocode` GPUI application shell. The core technical route is:
 
 - `ropey` for large editable text storage.
 - `tree-sitter-yaml` for incremental YAML concrete syntax and syntax errors.
@@ -10,7 +10,7 @@ mocode should be built as a UI-independent editor core with a Mihomo-aware seman
 - A semantic index over `proxies`, `proxy-groups`, `proxy-providers`, `rule-providers`, `rules`, `listeners`, and `dialer-proxy`.
 - Diagnostics and completions derived from YAML path plus semantic index.
 
-JSON Schema can describe many fields, but it is not enough for Mihomo-specific references, rule string grammar, dialer-proxy graphs, or comment-preserving edits. A custom schema model is the better primary representation; JSON Schema can be generated later if host tools need it.
+JSON Schema can describe many fields, but it is not enough for Mihomo-specific references, rule string grammar, `dialer-proxy` graphs, or comment-preserving edits. A custom schema model is the better primary representation; JSON Schema can be generated later if host tools need it.
 
 ## Mihomo Configuration Semantics
 
@@ -28,7 +28,7 @@ Official docs and the current `RawConfig` source show Mihomo as one YAML documen
 - `rules`: routing rules as strings. The last field generally names a proxy, group, or built-in target. `RULE-SET` references `rule-providers`.
 - `rule-providers`: named provider maps with `type`, `behavior`, `format`, `path`, `url`, headers, and optional inline `payload`.
 - `dialer-proxy`: a proxy-level or provider override field whose value references an outbound proxy or proxy group and creates a chain.
-- `external-controller` API: not part of mocode runtime control in phase 0, but fields such as `external-controller`, `external-controller-tls`, `external-controller-unix`, `external-controller-pipe`, `secret`, and CORS need docs and risk hints.
+- `external-controller` API: not part of mocode runtime control in the current scope, but fields such as `external-controller`, `external-controller-tls`, `external-controller-unix`, `external-controller-pipe`, `secret`, and CORS need docs and risk hints.
 
 The editor should model Mihomo references explicitly:
 
@@ -48,7 +48,7 @@ Built-in targets such as `DIRECT`, `REJECT`, `REJECT-DROP`, `PASS`, `COMPATIBLE`
 
 ### Rope
 
-Use `ropey` in `mocode-text`. It stores UTF-8 text as a rope, supports large files, line-to-char lookup, and efficient edits. mocode positions should initially use LSP-like `{ line, character }` where `character` is a Unicode scalar index. UI adapters may additionally map grapheme clusters for cursor painting and IME composition.
+Use `ropey` in `mocode-text`. It stores UTF-8 text as a rope, supports large files, line-to-char lookup, and efficient edits. mocode positions should initially use LSP-like `{ line, character }` where `character` is a Unicode scalar index. The app may additionally map grapheme clusters for cursor painting and IME composition.
 
 ### Incremental YAML Parse
 
@@ -64,7 +64,7 @@ The parser layer should expose:
 
 ### Typed YAML Decoding
 
-Use typed deserialization only for non-editing analysis that can tolerate losing comments and exact formatting. `serde_yml` is now documented as deprecated/unmaintained, so it should not be a primary choice. `yaml-rust2`, `serde-saphyr`, or a direct tree-sitter walker are better candidates for phase 1 evaluation.
+Use typed deserialization only for non-editing analysis that can tolerate losing comments and exact formatting. `serde_yml` is documented as deprecated/unmaintained, so it should not be a primary choice. `yaml-rust2`, `serde-saphyr`, or a direct tree-sitter walker are better candidates for semantic extraction.
 
 ### Lossless Formatting
 
@@ -75,7 +75,7 @@ Full YAML round-trip formatting is risky because comments, anchors, flow style, 
 - avoid whole-document rewrite by default
 - offer whole-document format only after a lossless strategy is proven
 
-Rowan-style full-fidelity trees are attractive, but there is no ready Mihomo/YAML lossless editing stack. It is a reference idea, not a phase 1 dependency.
+Rowan-style full-fidelity trees are attractive, but there is no ready Mihomo/YAML lossless editing stack. It is a reference idea, not a near-term dependency.
 
 ## JSON Schema vs Custom Schema
 
@@ -89,27 +89,19 @@ JSON Schema weaknesses for mocode:
 
 - weak for rule strings such as `DOMAIN-SUFFIX,example.com,Proxy`
 - weak for cross-document semantic references
-- weak for dialer-proxy graph cycle detection
+- weak for `dialer-proxy` graph cycle detection
 - cannot express many context-sensitive Mihomo hints cleanly
 - does not preserve comments or source locations by itself
 
 Decision: maintain a custom Rust schema catalog first. Generate JSON Schema later if useful.
 
-## GPUI, Floem, and egui
+## UI Framework Direction
 
-### GPUI
+GPUI is the selected UI framework for the application shell. It is promising for a high-performance editor-like component because it powers a production code editor and has examples for input, key dispatch, uniform lists, windows, and text wrapping. Risks are API maturity, documentation depth, and possible dependence on Zed ecosystem patterns.
 
-GPUI is Zed's GPU-accelerated Rust UI framework. It is promising for a high-performance editor-like component because it powers a production code editor and has examples for input, key dispatch, uniform lists, windows, and text wrapping. Risks are API maturity, documentation depth, and possible dependence on Zed ecosystem patterns.
+Current upstream GPUI README documents Windows support through Win32 windowing and DirectWrite text, with no Windows-specific feature flag required. The app should therefore compile the real GPUI path on Windows.
 
-Current upstream GPUI README documents Windows support through Win32 windowing and DirectWrite text, with no Windows-specific feature flag required. The prototype should therefore compile the real GPUI adapter on Windows instead of treating Windows as a fallback-only target.
-
-### Floem
-
-Floem is a Rust GUI library with fine-grained reactivity and ergonomic declarative views. It comes from the Lapce ecosystem and has optional editor-core related dependencies. It is promising for a reactive prototype and may integrate naturally with text editor concepts. Risks are API stability, documentation coverage, IME maturity, and long-term maintenance pace.
-
-### egui/eframe
-
-egui/eframe is a practical fallback and a good baseline for quick diagnostics UIs, but an immediate-mode architecture is less ideal for a high-performance large-text editor with IME, virtualized layout, hover popups, and rich text selection. It should remain a reference, not a primary target unless both GPUI and Floem fail acceptance.
+egui/eframe remains only a practical emergency fallback for quick diagnostics UIs. Its immediate-mode architecture is less suitable for a large-text editor with IME, virtualized layout, hover popups, and rich text selection.
 
 ## Risks and Unknowns
 
@@ -117,8 +109,8 @@ egui/eframe is a practical fallback and a good baseline for quick diagnostics UI
 - YAML grammar edge cases such as anchors, merge keys, block scalars, flow maps, and comments can break naive path lookup.
 - `dialer-proxy` can reference groups that include providers, so chain preview must distinguish definite vs possible chains.
 - Provider contents may be remote, inline YAML, URI, or base64. The local editor can validate configured provider names but cannot always know remote proxy names.
-- Chinese IME behavior must be tested in both GPUI and Floem before choosing a UI framework.
-- Whole-document formatting can damage user layout; phase 1 should prefer snippet and indentation formatting.
+- Chinese IME behavior must be tested on the GPUI app path before treating the app shell as production-ready.
+- Whole-document formatting can damage user layout; near-term work should prefer snippet and indentation formatting.
 - Performance target of 5000-20000 lines requires measuring parse latency, semantic-index latency, scrolling, and UI memory separately.
 
 ## Sources
@@ -143,5 +135,4 @@ egui/eframe is a practical fallback and a good baseline for quick diagnostics UI
 - Rowan: https://docs.rs/rowan/
 - GPUI: https://www.gpui.rs/
 - GPUI upstream README: https://github.com/zed-industries/zed/blob/main/crates/gpui/README.md
-- Floem: https://docs.rs/floem/latest/floem/
 - eframe: https://docs.rs/eframe/latest/eframe/

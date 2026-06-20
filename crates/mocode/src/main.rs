@@ -22,7 +22,7 @@ mod tests {
         fixtures::{SAMPLE_TITLE, default_fixture, document_by_fixture_id, document_from_fixture},
     };
 
-    fn load_demo_document() -> GpuiEditorDocument {
+    fn load_app_document() -> GpuiEditorDocument {
         document_from_fixture(default_fixture())
     }
 
@@ -36,7 +36,7 @@ mod tests {
             .expect("system time should be after unix epoch")
             .as_nanos();
         std::env::temp_dir().join(format!(
-            "mocode-gpui-demo-{label}-{}-{nanos}.yaml",
+            "mocode-{label}-{}-{nanos}.yaml",
             std::process::id()
         ))
     }
@@ -120,7 +120,7 @@ mod tests {
 
     #[test]
     fn saving_fixture_without_path_reports_unsaved_state() {
-        let mut document = load_demo_document();
+        let mut document = load_app_document();
 
         let result = document.save_to_original_path();
 
@@ -135,7 +135,7 @@ mod tests {
         let component_source = include_str!("component.rs");
 
         assert!(!component_source.contains("crate::fixtures"));
-        assert!(!component_source.contains("DemoFixture"));
+        assert!(!component_source.contains("AppFixture"));
         assert!(!component_source.contains("from_fixture"));
     }
 
@@ -148,8 +148,8 @@ mod tests {
     }
 
     #[test]
-    fn builds_demo_document_from_core_snapshot() {
-        let document = load_demo_document();
+    fn builds_app_document_from_core_snapshot() {
+        let document = load_app_document();
 
         assert_eq!(document.title, SAMPLE_TITLE);
         assert!(document.line_count > 10);
@@ -323,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn backspaces_deletes_and_moves_cursor_in_demo_state() {
+    fn backspaces_deletes_and_moves_cursor_in_app_state() {
         let mut document = GpuiEditorDocument::from_text(
             "scratch.yaml",
             "dns:\n  enable: true\n",
@@ -346,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn undo_redo_updates_demo_state_and_clears_selection() {
+    fn undo_redo_updates_app_state_and_clears_selection() {
         let mut document = GpuiEditorDocument::from_text(
             "scratch.yaml",
             "dns:\n  enhanced-mode: \n",

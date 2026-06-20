@@ -1,11 +1,11 @@
 [package]
-name = "mocode-gpui-demo"
+name = "mocode"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "GPUI prototype adapter for mocode"
+description = "Mihomo config editor app shell"
 
 [dependencies]
 gpui = "0.2.2"

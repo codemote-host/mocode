@@ -4,7 +4,7 @@ use crate::{
     component::{
         self, GpuiEditorComponent, GpuiEditorDocument, GpuiEditorHost, render_editor_component,
     },
-    fixtures::{DemoFixture, all_fixtures, default_document, document_by_fixture_id},
+    fixtures::{AppFixture, all_fixtures, default_document, document_by_fixture_id},
 };
 use gpui::{
     App, Application, Bounds, Context, FocusHandle, Focusable, IntoElement, MouseButton,
@@ -30,7 +30,7 @@ fn run_with_startup_path(startup_path: Option<PathBuf>) {
                 let focus_handle = cx.focus_handle().tab_stop(true);
                 focus_handle.focus(window);
                 let document = initial_document_from_startup_path(startup_path.as_deref());
-                cx.new(|_| MocodeGpuiDemo {
+                cx.new(|_| MocodeApp {
                     editor: GpuiEditorComponent::new(document, focus_handle),
                 })
             },
@@ -57,11 +57,11 @@ pub(crate) fn initial_document_from_startup_path(path: Option<&Path>) -> GpuiEdi
     }
 }
 
-struct MocodeGpuiDemo {
+struct MocodeApp {
     editor: GpuiEditorComponent,
 }
 
-impl MocodeGpuiDemo {
+impl MocodeApp {
     fn select_fixture(&mut self, id: &'static str, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(document) = document_by_fixture_id(id) {
             self.editor.replace_document(document);
@@ -71,7 +71,7 @@ impl MocodeGpuiDemo {
     }
 }
 
-impl GpuiEditorHost for MocodeGpuiDemo {
+impl GpuiEditorHost for MocodeApp {
     fn editor_component(&self) -> &GpuiEditorComponent {
         &self.editor
     }
@@ -81,13 +81,13 @@ impl GpuiEditorHost for MocodeGpuiDemo {
     }
 }
 
-impl Focusable for MocodeGpuiDemo {
+impl Focusable for MocodeApp {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.editor.focus_handle().clone()
     }
 }
 
-impl Render for MocodeGpuiDemo {
+impl Render for MocodeApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         div()
             .size_full()
@@ -105,7 +105,7 @@ impl Render for MocodeGpuiDemo {
     }
 }
 
-fn header(editor: &GpuiEditorComponent, cx: &mut Context<'_, MocodeGpuiDemo>) -> impl IntoElement {
+fn header(editor: &GpuiEditorComponent, cx: &mut Context<'_, MocodeApp>) -> impl IntoElement {
     let document = editor.document();
     div()
         .flex()
@@ -118,17 +118,12 @@ fn header(editor: &GpuiEditorComponent, cx: &mut Context<'_, MocodeGpuiDemo>) ->
         .border_b_1()
         .border_color(rgb(0xd9e2ec))
         .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child("mocode GPUI prototype")
-                .child(
-                    div()
-                        .text_color(rgb(0x5f6b7a))
-                        .text_size(px(12.0))
-                        .child(document.title.clone()),
-                ),
+            div().flex().flex_col().gap_1().child("mocode").child(
+                div()
+                    .text_color(rgb(0x5f6b7a))
+                    .text_size(px(12.0))
+                    .child(document.title.clone()),
+            ),
         )
         .child(
             div()
@@ -152,7 +147,7 @@ fn header(editor: &GpuiEditorComponent, cx: &mut Context<'_, MocodeGpuiDemo>) ->
         )
 }
 
-fn fixture_selector(cx: &mut Context<'_, MocodeGpuiDemo>) -> impl IntoElement {
+fn fixture_selector(cx: &mut Context<'_, MocodeApp>) -> impl IntoElement {
     let mut selector = div().flex().flex_row().gap_1();
     for fixture in all_fixtures().iter() {
         selector = selector.child(fixture_button(fixture, cx));
@@ -161,8 +156,8 @@ fn fixture_selector(cx: &mut Context<'_, MocodeGpuiDemo>) -> impl IntoElement {
 }
 
 fn fixture_button(
-    fixture: &'static DemoFixture,
-    cx: &mut Context<'_, MocodeGpuiDemo>,
+    fixture: &'static AppFixture,
+    cx: &mut Context<'_, MocodeApp>,
 ) -> impl IntoElement {
     let fixture_id = fixture.id;
     div()
