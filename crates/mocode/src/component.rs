@@ -13,8 +13,8 @@ use mocode_api::{
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, ElementInputHandler, EntityInputHandler, FocusHandle,
-    IntoElement, KeyBinding, MouseButton, MouseDownEvent, Pixels, Point, Window, actions, div,
-    point, prelude::*, px, rgb, uniform_list,
+    IntoElement, KeyBinding, MouseButton, MouseDownEvent, Pixels, Point, Window, actions, canvas,
+    div, point, prelude::*, px, rgb, uniform_list,
 };
 
 const LINE_HEIGHT_PX: f32 = 22.0;
@@ -1042,7 +1042,10 @@ where
     let line_list_bounds = editor.line_list_bounds_handle();
     let focus_handle = editor.focus_handle().clone();
     let entity = cx.entity();
+    let input_focus_handle = focus_handle.clone();
+    let input_entity = entity.clone();
     div()
+        .relative()
         .flex_1()
         .w_full()
         .h_full()
@@ -1258,14 +1261,9 @@ where
                 },
             ),
         )
-        .on_children_prepainted(move |children_bounds, window, cx| {
+        .on_children_prepainted(move |children_bounds, _, _| {
             if let Some(bounds) = children_bounds.first().copied() {
                 *line_list_bounds.borrow_mut() = Some(bounds);
-                window.handle_input(
-                    &focus_handle,
-                    ElementInputHandler::new(bounds, entity.clone()),
-                    cx,
-                );
             }
         })
         .child(
@@ -1301,6 +1299,22 @@ where
                 ),
             )
             .h_full(),
+        )
+        .child(
+            canvas(
+                |_, _, _| (),
+                move |bounds, _, window, cx| {
+                    window.handle_input(
+                        &input_focus_handle,
+                        ElementInputHandler::new(bounds, input_entity.clone()),
+                        cx,
+                    );
+                },
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full(),
         )
 }
 

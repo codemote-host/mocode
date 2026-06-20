@@ -211,6 +211,23 @@ mod tests {
     }
 
     #[test]
+    fn ime_input_handler_is_registered_from_paint_path() {
+        let component_source = include_str!("component.rs");
+        let prepaint_index = component_source
+            .find(".on_children_prepainted")
+            .expect("editor should capture child bounds during prepaint");
+        let prepaint_tail = &component_source[prepaint_index..];
+        let prepaint_block = prepaint_tail
+            .split(".child(")
+            .next()
+            .expect("prepaint block should end before child layout");
+
+        assert!(!prepaint_block.contains("handle_input("));
+        assert!(component_source.contains("canvas("));
+        assert!(component_source.contains("ElementInputHandler::new"));
+    }
+
+    #[test]
     fn builds_app_document_from_core_snapshot() {
         let document = load_app_document();
 
