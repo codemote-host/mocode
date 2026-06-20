@@ -609,6 +609,28 @@ mod tests {
     }
 
     #[test]
+    fn editor_surface_allows_horizontal_scroll_for_long_lines() {
+        let component_source = include_str!("component.rs");
+
+        assert!(component_source.contains("ListHorizontalSizingBehavior::Unconstrained"));
+        assert!(component_source.contains(".with_horizontal_sizing_behavior("));
+    }
+
+    #[test]
+    fn editor_line_text_is_not_truncated() {
+        let component_source = include_str!("component.rs");
+        let line_text_source = component_source
+            .split("fn render_line_text")
+            .nth(1)
+            .and_then(|source| source.split("fn char_to_byte_index").next())
+            .expect("render_line_text source should be present");
+
+        assert!(!line_text_source.contains(".text_ellipsis()"));
+        assert!(!line_text_source.contains(".overflow_hidden()"));
+        assert!(!line_text_source.contains(".w(px(756.0))"));
+    }
+
+    #[test]
     fn document_text_returns_current_core_text() {
         let mut document = GpuiEditorDocument::from_text(
             "scratch.yaml",

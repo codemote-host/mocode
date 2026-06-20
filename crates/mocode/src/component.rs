@@ -13,9 +13,9 @@ use mocode_api::{
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, ElementInputHandler, EntityInputHandler, FocusHandle,
-    IntoElement, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, ScrollStrategy, UniformListScrollHandle, Window, actions, canvas, div, point,
-    prelude::*, px, rgb, uniform_list,
+    IntoElement, KeyBinding, ListHorizontalSizingBehavior, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollStrategy, UniformListScrollHandle, Window,
+    actions, canvas, div, point, prelude::*, px, rgb, uniform_list,
 };
 
 const LINE_HEIGHT_PX: f32 = 22.0;
@@ -1450,6 +1450,7 @@ where
                     },
                 ),
             )
+            .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
             .track_scroll(scroll_handle)
             .h_full(),
         )
@@ -1609,15 +1610,12 @@ fn render_line_text(
         let cursor_at_end = cursor == Some(sel_end);
 
         div()
-            .w(px(756.0))
             .px_3()
             .flex()
             .flex_row()
             .items_center()
             .text_color(rgb(0x0f172a))
             .whitespace_nowrap()
-            .overflow_hidden()
-            .text_ellipsis()
             .child(before)
             .when(cursor_at_start, |this| {
                 this.child(div().w(px(1.0)).h(px(16.0)).bg(rgb(0x2563eb)))
@@ -1633,15 +1631,12 @@ fn render_line_text(
             .unwrap_or_else(|| (text, String::new()));
 
         div()
-            .w(px(756.0))
             .px_3()
             .flex()
             .flex_row()
             .items_center()
             .text_color(rgb(0x0f172a))
             .whitespace_nowrap()
-            .overflow_hidden()
-            .text_ellipsis()
             .child(before_cursor)
             .when(cursor.is_some(), |this| {
                 this.child(div().w(px(1.0)).h(px(16.0)).bg(rgb(0x2563eb)))
