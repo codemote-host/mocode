@@ -18,7 +18,7 @@ mod tests {
 
     use crate::{
         app,
-        component::{GpuiEditorDocument, GpuiEditorSaveError},
+        component::{GpuiEditorDocument, GpuiEditorSaveError, GpuiSearchHighlight},
         fixtures::{SAMPLE_TITLE, default_fixture, document_by_fixture_id, document_from_fixture},
     };
 
@@ -840,6 +840,55 @@ mod tests {
         assert!(document.search_active);
         assert_eq!(document.search_query, "enhanced-mode");
         assert_eq!(document.search_summary, "enhanced-mode - 1/1 at 2:3");
+    }
+
+    #[test]
+    fn search_highlights_cover_visible_matches_and_current_match() {
+        let mut document = GpuiEditorDocument::from_text(
+            "search.yaml",
+            "alpha\nbeta alpha\nalpha beta\n",
+            TextPosition::new(0, 0),
+        );
+
+        document.set_search_query("alpha");
+        document.find_next();
+
+        let highlights = document.search_highlights_in_range(0, 3);
+
+        assert_eq!(
+            highlights.get(&0).unwrap(),
+            &vec![GpuiSearchHighlight {
+                start: 0,
+                end: 5,
+                active: true,
+            }]
+        );
+        assert_eq!(
+            highlights.get(&1).unwrap(),
+            &vec![GpuiSearchHighlight {
+                start: 5,
+                end: 10,
+                active: false,
+            }]
+        );
+        assert_eq!(
+            highlights.get(&2).unwrap(),
+            &vec![GpuiSearchHighlight {
+                start: 0,
+                end: 5,
+                active: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn editor_surface_wires_search_highlights_into_line_rendering() {
+        let component_source = include_str!("component.rs");
+
+        assert!(component_source.contains("search_highlights_in_range"));
+        assert!(component_source.contains("line_search_highlights"));
+        assert!(component_source.contains(".child(render_line_text("));
+        assert!(component_source.contains("search_highlights: Vec<GpuiSearchHighlight>"));
     }
 
     #[test]

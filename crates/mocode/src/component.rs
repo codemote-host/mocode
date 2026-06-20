@@ -1,5 +1,6 @@
 use std::{
     cell::RefCell,
+    collections::BTreeMap,
     fs, io,
     ops::Range,
     path::{Path, PathBuf},
@@ -12,10 +13,11 @@ use mocode_api::{
 };
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, ElementInputHandler, EntityInputHandler, FocusHandle,
-    IntoElement, KeyBinding, ListHorizontalSizingBehavior, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollStrategy, UniformListScrollHandle, Window,
-    actions, canvas, div, point, prelude::*, px, rgb, uniform_list,
+    AnyElement, App, Bounds, ClipboardItem, Context, ElementInputHandler, EntityInputHandler,
+    FocusHandle, IntoElement, KeyBinding, ListHorizontalSizingBehavior, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollStrategy,
+    UniformListScrollHandle, Window, actions, canvas, div, point, prelude::*, px, rgb,
+    uniform_list,
 };
 
 const LINE_HEIGHT_PX: f32 = 22.0;
@@ -99,6 +101,13 @@ pub(crate) struct GpuiEditorCompletionPopup {
     pub(crate) anchor_line: u32,
     pub(crate) anchor_column: u32,
     pub(crate) items: Vec<GpuiEditorCompletion>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GpuiSearchHighlight {
+    pub(crate) start: u32,
+    pub(crate) end: u32,
+    pub(crate) active: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -630,6 +639,54 @@ impl GpuiEditorDocument {
                     .map(|diagnostic| severity_label(diagnostic.severity).to_string()),
             })
             .collect()
+    }
+
+    pub(crate) fn search_highlights_in_range(
+        &self,
+        start_line: usize,
+        end_line: usize,
+    ) -> BTreeMap<u32, Vec<GpuiSearchHighlight>> {
+        if !self.search_active || self.search_query.is_empty() || start_line >= end_line {
+            return BTreeMap::new();
+        }
+
+        let text = self.text();
+        let current_range = self.selected_range().map(ordered_text_range);
+        let mut highlights: BTreeMap<u32, Vec<GpuiSearchHighlight>> = BTreeMap::new();
+
+        for start_byte in match_start_indices(&text, &self.search_query) {
+            let Some(search_match) =
+                build_search_match(&text, &self.search_query, start_byte, 0, 0)
+            else {
+                continue;
+            };
+            let active = current_range == Some(search_match.range);
+            let first_line = search_match.range.start.line as usize;
+            let last_line = search_match.range.end.line as usize;
+            let visible_start = first_line.max(start_line);
+            let visible_end = last_line.min(end_line.saturating_sub(1));
+
+            for line in visible_start..=visible_end {
+                let Some(line_end) = self.editor.line_end_position(line) else {
+                    continue;
+                };
+                let Some((highlight_start, highlight_end)) =
+                    text_range_on_line(line as u32, line_end.character, search_match.range)
+                else {
+                    continue;
+                };
+                highlights
+                    .entry(line as u32)
+                    .or_default()
+                    .push(GpuiSearchHighlight {
+                        start: highlight_start,
+                        end: highlight_end,
+                        active,
+                    });
+            }
+        }
+
+        highlights
     }
 
     pub(crate) fn save_to_original_path(&mut self) -> Result<(), GpuiEditorSaveError> {
@@ -1499,6 +1556,8 @@ where
                         let document = this.editor_component().document();
                         let slice = document.lines_in_range(range.start, range.end);
                         let selection_range = document.selected_range();
+                        let mut search_highlights =
+                            document.search_highlights_in_range(range.start, range.end);
                         let mut rows = Vec::new();
                         for (offset, line) in slice.into_iter().enumerate() {
                             let index = range.start + offset;
@@ -1508,6 +1567,8 @@ where
                             let line_selection = selection_range.and_then(|r| {
                                 selection_on_line(index_u32, line.text.chars().count() as u32, r)
                             });
+                            let line_search_highlights =
+                                search_highlights.remove(&index_u32).unwrap_or_default();
                             rows.push(line_row(
                                 index,
                                 line.number,
@@ -1516,6 +1577,7 @@ where
                                 line.diagnostic_severity,
                                 cursor,
                                 line_selection,
+                                line_search_highlights,
                             ));
                         }
                         rows
@@ -1634,6 +1696,7 @@ fn line_row(
     diagnostic_severity: Option<String>,
     cursor: Option<u32>,
     selection: Option<(u32, u32)>,
+    search_highlights: Vec<GpuiSearchHighlight>,
 ) -> impl IntoElement {
     let marker_color = diagnostic_severity
         .as_deref()
@@ -1662,59 +1725,198 @@ fn line_row(
                     format!("{number:>3}!")
                 })),
         )
-        .child(render_line_text(text, cursor, selection))
+        .child(render_line_text(text, cursor, selection, search_highlights))
 }
 
 fn render_line_text(
     text: String,
     cursor: Option<u32>,
     selection: Option<(u32, u32)>,
+    search_highlights: Vec<GpuiSearchHighlight>,
 ) -> impl IntoElement {
-    if let Some((sel_start, sel_end)) = selection {
-        let sel_start_byte = char_to_byte_index(&text, sel_start);
-        let sel_end_byte = char_to_byte_index(&text, sel_end);
+    div()
+        .px_3()
+        .flex()
+        .flex_row()
+        .items_center()
+        .text_color(rgb(0x0f172a))
+        .whitespace_nowrap()
+        .children(render_text_segments(
+            &text,
+            cursor,
+            text_highlights_for_line(selection, search_highlights),
+        ))
+}
 
-        let before = text[..sel_start_byte].to_string();
-        let highlighted = text[sel_start_byte..sel_end_byte].to_string();
-        let after = text[sel_end_byte..].to_string();
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TextHighlightKind {
+    Search,
+    ActiveSearch,
+    Selection,
+}
 
-        let cursor_at_start = cursor == Some(sel_start);
-        let cursor_at_end = cursor == Some(sel_end);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TextHighlight {
+    start: u32,
+    end: u32,
+    kind: TextHighlightKind,
+}
 
-        div()
-            .px_3()
-            .flex()
-            .flex_row()
-            .items_center()
-            .text_color(rgb(0x0f172a))
-            .whitespace_nowrap()
-            .child(before)
-            .when(cursor_at_start, |this| {
-                this.child(div().w(px(1.0)).h(px(16.0)).bg(rgb(0x2563eb)))
+fn text_highlights_for_line(
+    selection: Option<(u32, u32)>,
+    search_highlights: Vec<GpuiSearchHighlight>,
+) -> Vec<TextHighlight> {
+    let selection = selection.and_then(|(start, end)| {
+        (start < end).then_some(TextHighlight {
+            start,
+            end,
+            kind: TextHighlightKind::Selection,
+        })
+    });
+
+    let mut highlights: Vec<TextHighlight> = search_highlights
+        .into_iter()
+        .filter(|highlight| highlight.start < highlight.end)
+        .filter(|highlight| {
+            selection.is_none_or(|selection| {
+                highlight.end <= selection.start || highlight.start >= selection.end
             })
-            .child(div().bg(rgb(0xdbeafe)).child(highlighted))
-            .when(cursor_at_end, |this| {
-                this.child(div().w(px(1.0)).h(px(16.0)).bg(rgb(0x2563eb)))
-            })
-            .child(after)
-    } else {
-        let (before_cursor, after_cursor) = cursor
-            .map(|c| split_at_character(&text, c))
-            .unwrap_or_else(|| (text, String::new()));
+        })
+        .map(|highlight| TextHighlight {
+            start: highlight.start,
+            end: highlight.end,
+            kind: if highlight.active {
+                TextHighlightKind::ActiveSearch
+            } else {
+                TextHighlightKind::Search
+            },
+        })
+        .collect();
 
-        div()
-            .px_3()
-            .flex()
-            .flex_row()
-            .items_center()
-            .text_color(rgb(0x0f172a))
-            .whitespace_nowrap()
-            .child(before_cursor)
-            .when(cursor.is_some(), |this| {
-                this.child(div().w(px(1.0)).h(px(16.0)).bg(rgb(0x2563eb)))
-            })
-            .child(after_cursor)
+    if let Some(selection) = selection {
+        highlights.push(selection);
     }
+
+    highlights.sort_by_key(|highlight| highlight.start);
+    highlights
+}
+
+fn render_text_segments(
+    text: &str,
+    cursor: Option<u32>,
+    highlights: Vec<TextHighlight>,
+) -> Vec<AnyElement> {
+    let line_length = text.chars().count() as u32;
+    let mut children = Vec::new();
+    let mut cursor_inserted = false;
+    let mut position = 0;
+
+    for highlight in highlights {
+        let highlight_start = highlight.start.min(line_length).max(position);
+        let highlight_end = highlight.end.min(line_length);
+        if highlight_start >= highlight_end {
+            continue;
+        }
+
+        push_text_segment(
+            &mut children,
+            text,
+            position,
+            highlight_start,
+            cursor,
+            &mut cursor_inserted,
+            None,
+        );
+        push_text_segment(
+            &mut children,
+            text,
+            highlight_start,
+            highlight_end,
+            cursor,
+            &mut cursor_inserted,
+            Some(highlight.kind),
+        );
+        position = highlight_end;
+    }
+
+    push_text_segment(
+        &mut children,
+        text,
+        position,
+        line_length,
+        cursor,
+        &mut cursor_inserted,
+        None,
+    );
+
+    if !cursor_inserted
+        && let Some(cursor) = cursor
+        && cursor == line_length
+    {
+        push_cursor(&mut children);
+    }
+
+    children
+}
+
+fn push_text_segment(
+    children: &mut Vec<AnyElement>,
+    text: &str,
+    start: u32,
+    end: u32,
+    cursor: Option<u32>,
+    cursor_inserted: &mut bool,
+    highlight: Option<TextHighlightKind>,
+) {
+    let cursor_in_segment =
+        !*cursor_inserted && cursor.is_some_and(|cursor| cursor >= start && cursor <= end);
+
+    if cursor_in_segment {
+        let cursor = cursor.unwrap();
+        push_text_piece(children, text, start, cursor, highlight);
+        push_cursor(children);
+        *cursor_inserted = true;
+        push_text_piece(children, text, cursor, end, highlight);
+    } else {
+        push_text_piece(children, text, start, end, highlight);
+    }
+}
+
+fn push_text_piece(
+    children: &mut Vec<AnyElement>,
+    text: &str,
+    start: u32,
+    end: u32,
+    highlight: Option<TextHighlightKind>,
+) {
+    if start >= end {
+        return;
+    }
+
+    let start_byte = char_to_byte_index(text, start);
+    let end_byte = char_to_byte_index(text, end);
+    let piece = text[start_byte..end_byte].to_string();
+    let element = match highlight {
+        Some(TextHighlightKind::Search) => div().bg(rgb(0xfef3c7)).child(piece).into_any_element(),
+        Some(TextHighlightKind::ActiveSearch) => {
+            div().bg(rgb(0xfbbf24)).child(piece).into_any_element()
+        }
+        Some(TextHighlightKind::Selection) => {
+            div().bg(rgb(0xdbeafe)).child(piece).into_any_element()
+        }
+        None => div().child(piece).into_any_element(),
+    };
+    children.push(element);
+}
+
+fn push_cursor(children: &mut Vec<AnyElement>) {
+    children.push(
+        div()
+            .w(px(1.0))
+            .h(px(16.0))
+            .bg(rgb(0x2563eb))
+            .into_any_element(),
+    );
 }
 
 fn char_to_byte_index(text: &str, char_index: u32) -> usize {
@@ -2201,6 +2403,10 @@ fn severity_color(severity: &str) -> gpui::Hsla {
 /// Returns `None` when the selection does not overlap `line_index`,
 /// or when the overlap is empty (e.g. collapsed selection on empty line).
 fn selection_on_line(line_index: u32, line_length: u32, range: TextRange) -> Option<(u32, u32)> {
+    text_range_on_line(line_index, line_length, range)
+}
+
+fn text_range_on_line(line_index: u32, line_length: u32, range: TextRange) -> Option<(u32, u32)> {
     let start = range.start.min(range.end);
     let end = range.start.max(range.end);
 
@@ -2224,13 +2430,4 @@ fn selection_on_line(line_index: u32, line_length: u32, range: TextRange) -> Opt
     }
 
     Some((sel_start, sel_end))
-}
-
-fn split_at_character(text: &str, character: u32) -> (String, String) {
-    let split_at = text
-        .char_indices()
-        .nth(character as usize)
-        .map(|(index, _)| index)
-        .unwrap_or(text.len());
-    (text[..split_at].to_string(), text[split_at..].to_string())
 }
