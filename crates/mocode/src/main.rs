@@ -180,6 +180,60 @@ mod tests {
     }
 
     #[test]
+    fn daily_open_path_blocks_dirty_document() {
+        let original_path = write_temp_yaml("dirty-open-original", "mixed-port: 7890\n");
+        let target_path = write_temp_yaml("dirty-open-target", "mode: direct\n");
+        let mut document = GpuiEditorDocument::from_path(&original_path).unwrap();
+
+        document.insert_text("# unsaved\n").unwrap();
+        let opened = document.open_path_if_clean(&target_path).unwrap();
+
+        assert!(!opened);
+        assert_eq!(document.path.as_deref(), Some(original_path.as_path()));
+        assert_eq!(document.title, file_name(&original_path));
+        assert_eq!(document.text(), "# unsaved\nmixed-port: 7890\n");
+        assert!(document.dirty);
+        assert!(document.save_status.contains("Unsaved changes"));
+
+        fs::remove_file(original_path).ok();
+        fs::remove_file(target_path).ok();
+    }
+
+    #[test]
+    fn daily_open_path_after_save_replaces_document() {
+        let original_path = write_temp_yaml("clean-open-original", "mixed-port: 7890\n");
+        let target_path = write_temp_yaml("clean-open-target", "mode: direct\n");
+        let mut document = GpuiEditorDocument::from_path(&original_path).unwrap();
+
+        document.insert_text("# saved\n").unwrap();
+        document.save_to_original_path().unwrap();
+        let opened = document.open_path_if_clean(&target_path).unwrap();
+
+        assert!(opened);
+        assert_eq!(document.path.as_deref(), Some(target_path.as_path()));
+        assert_eq!(document.title, file_name(&target_path));
+        assert_eq!(document.text(), "mode: direct\n");
+        assert!(!document.dirty);
+        assert!(document.save_status.contains("Opened"));
+
+        let backup_path = GpuiEditorDocument::backup_path_for(&original_path);
+        fs::remove_file(original_path).ok();
+        fs::remove_file(target_path).ok();
+        fs::remove_file(backup_path).ok();
+    }
+
+    #[test]
+    fn open_action_checks_unsaved_changes_before_file_prompt() {
+        let app_source = include_str!("app.rs");
+
+        assert!(app_source.contains("has_unsaved_changes()"));
+        assert!(
+            app_source.find("has_unsaved_changes()").unwrap()
+                < app_source.find("prompt_for_paths").unwrap()
+        );
+    }
+
+    #[test]
     fn component_source_stays_fixture_agnostic() {
         let component_source = include_str!("component.rs");
 

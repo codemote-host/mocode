@@ -176,6 +176,17 @@ impl GpuiEditorDocument {
         Ok(document)
     }
 
+    pub(crate) fn open_path_if_clean(&mut self, path: impl AsRef<Path>) -> io::Result<bool> {
+        let path = path.as_ref();
+        if self.dirty {
+            self.save_status = format!("Unsaved changes; save before opening {}", path.display());
+            return Ok(false);
+        }
+
+        *self = Self::from_path(path)?;
+        Ok(true)
+    }
+
     pub(crate) fn from_text_with_path(
         title: impl Into<String>,
         text: &str,
@@ -1509,9 +1520,18 @@ impl GpuiEditorComponent {
     }
 
     pub(crate) fn open_path(&mut self, path: impl AsRef<Path>) -> io::Result<()> {
-        self.document = GpuiEditorDocument::from_path(path)?;
-        self.reveal_cursor();
+        if self.document.open_path_if_clean(path)? {
+            self.reveal_cursor();
+        }
         Ok(())
+    }
+
+    pub(crate) fn has_unsaved_changes(&self) -> bool {
+        self.document.dirty
+    }
+
+    pub(crate) fn block_open_for_unsaved_changes(&mut self) {
+        self.document.save_status = "Unsaved changes; save before opening another file".to_string();
     }
 
     fn start_search_from_selection(&mut self) {

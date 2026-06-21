@@ -105,6 +105,12 @@ impl GpuiEditorHost for MocodeApp {
     }
 
     fn open_document(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor.has_unsaved_changes() {
+            self.editor.block_open_for_unsaved_changes();
+            cx.notify();
+            return;
+        }
+
         self.editor.document_mut().save_status = "Opening file...".to_string();
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
