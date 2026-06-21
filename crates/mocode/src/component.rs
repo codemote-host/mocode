@@ -213,8 +213,14 @@ impl GpuiEditorDocument {
         document
     }
 
+    #[cfg(test)]
     pub(crate) fn insert_text(&mut self, text: &str) -> Result<(), EditorError> {
         self.replace_utf16_range(None, text)
+    }
+
+    pub(crate) fn insert_pasted_text(&mut self, text: &str) -> Result<(), EditorError> {
+        let normalized = normalize_pasted_yaml_indentation(text, &self.current_line_prefix());
+        self.replace_utf16_range(None, &normalized)
     }
 
     pub(crate) fn commit_text(&mut self, text: &str) -> Result<(), EditorError> {
@@ -1047,8 +1053,8 @@ impl GpuiEditorComponent {
         true
     }
 
-    fn insert_text(&mut self, text: &str) -> Result<(), EditorError> {
-        let result = self.document.insert_text(text);
+    fn insert_pasted_text(&mut self, text: &str) -> Result<(), EditorError> {
+        let result = self.document.insert_pasted_text(text);
         self.reveal_if_ok(result)
     }
 
@@ -1506,7 +1512,10 @@ where
         )
         .on_action(cx.listener(|this: &mut T, _: &Paste, _: &mut Window, cx| {
             if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text())
-                && this.editor_component_mut().insert_text(&text).is_ok()
+                && this
+                    .editor_component_mut()
+                    .insert_pasted_text(&text)
+                    .is_ok()
             {
                 cx.notify();
             }
@@ -1984,8 +1993,37 @@ fn auto_indent_for_line_prefix(line_prefix: &str) -> String {
     indent
 }
 
+fn normalize_pasted_yaml_indentation(text: &str, line_prefix: &str) -> String {
+    if !text.contains('\n') {
+        return text.to_string();
+    }
+
+    let base_indent = leading_spaces(line_prefix);
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut normalized = strip_trailing_carriage_return(lines[0]).to_string();
+    let last_index = lines.len().saturating_sub(1);
+
+    for (index, line) in lines.iter().enumerate().skip(1) {
+        let line = strip_trailing_carriage_return(line);
+        normalized.push('\n');
+
+        if index == last_index && line.is_empty() && text.ends_with('\n') {
+            continue;
+        }
+
+        normalized.push_str(&base_indent);
+        normalized.push_str(line.trim_start_matches(' '));
+    }
+
+    normalized
+}
+
 fn leading_spaces(text: &str) -> String {
     text.chars().take_while(|ch| *ch == ' ').collect()
+}
+
+fn strip_trailing_carriage_return(line: &str) -> &str {
+    line.strip_suffix('\r').unwrap_or(line)
 }
 
 fn char_to_byte_index(text: &str, char_index: u32) -> usize {

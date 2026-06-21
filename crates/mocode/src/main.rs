@@ -477,6 +477,67 @@ mod tests {
     }
 
     #[test]
+    fn paste_multiline_normalizes_following_lines_to_current_indent() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  nameserver:\n    \n",
+            TextPosition::new(2, 4),
+        );
+
+        document.insert_pasted_text("- 1.1.1.1\n- 8.8.8.8").unwrap();
+
+        assert_eq!(document.line_at(2).unwrap().text, "    - 1.1.1.1");
+        assert_eq!(document.line_at(3).unwrap().text, "    - 8.8.8.8");
+        assert_eq!(document.cursor, TextPosition::new(3, 13));
+    }
+
+    #[test]
+    fn paste_multiline_keeps_first_line_as_pasted() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "rules:\n  - \n",
+            TextPosition::new(1, 4),
+        );
+
+        document
+            .insert_pasted_text("DOMAIN,example.com,Proxy\nDOMAIN-SUFFIX,example.org,Proxy")
+            .unwrap();
+
+        assert_eq!(
+            document.line_at(1).unwrap().text,
+            "  - DOMAIN,example.com,Proxy"
+        );
+        assert_eq!(
+            document.line_at(2).unwrap().text,
+            "  DOMAIN-SUFFIX,example.org,Proxy"
+        );
+    }
+
+    #[test]
+    fn paste_single_line_keeps_text_unchanged() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enhanced-mode: \n",
+            TextPosition::new(1, 17),
+        );
+
+        document.insert_pasted_text("fake-ip").unwrap();
+
+        assert_eq!(
+            document.line_at(1).unwrap().text,
+            "  enhanced-mode: fake-ip"
+        );
+        assert_eq!(document.cursor, TextPosition::new(1, 24));
+    }
+
+    #[test]
+    fn paste_action_uses_paste_specific_indent_path() {
+        let component_source = include_str!("component.rs");
+
+        assert!(component_source.contains("insert_pasted_text(&text)"));
+    }
+
+    #[test]
     fn selection_insert_replaces_selected_text() {
         let mut document = GpuiEditorDocument::from_text(
             "scratch.yaml",
