@@ -546,6 +546,37 @@ impl GpuiEditorDocument {
         true
     }
 
+    pub(crate) fn select_yaml_identifier_at(&mut self, position: TextPosition) -> bool {
+        let Some(line_text) = self.editor.line_text(position.line as usize) else {
+            return false;
+        };
+        let Some(range) =
+            identifier_range_at_position(position.line, &line_text, position.character)
+        else {
+            return false;
+        };
+
+        self.selection_anchor = Some(range.start);
+        self.cursor = range.end;
+        self.ime_marked_range = None;
+        self.completion_popup = None;
+        self.refresh_derived();
+        true
+    }
+
+    pub(crate) fn select_line_content_at(&mut self, position: TextPosition) -> bool {
+        let Some(line_end) = self.editor.line_end_position(position.line as usize) else {
+            return false;
+        };
+
+        self.selection_anchor = Some(TextPosition::new(position.line, 0));
+        self.cursor = line_end;
+        self.ime_marked_range = None;
+        self.completion_popup = None;
+        self.refresh_derived();
+        true
+    }
+
     pub(crate) const PAGE_LINES: u32 = 25;
 
     pub(crate) fn move_up(&mut self) -> Result<(), EditorError> {
@@ -628,6 +659,54 @@ impl GpuiEditorDocument {
         self.ensure_selection_anchor();
         self.cursor = position;
         self.refresh_derived();
+    }
+
+    pub(crate) fn extend_selection_to(&mut self, position: TextPosition) {
+        self.select_to(position);
+    }
+
+    pub(crate) fn apply_mouse_down_selection(
+        &mut self,
+        position: TextPosition,
+        click_count: usize,
+        shift: bool,
+    ) -> bool {
+        match mouse_down_selection_policy(click_count, shift) {
+            MouseDownSelectionPolicy::Extend => {
+                self.extend_selection_to(position);
+                true
+            }
+            MouseDownSelectionPolicy::Single => {
+                self.begin_selection_at(position);
+                true
+            }
+            MouseDownSelectionPolicy::Word => {
+                if self.can_mouse_select_yaml_identifier_at(position)
+                    && self.select_yaml_identifier_at(position)
+                {
+                    false
+                } else {
+                    self.begin_selection_at(position);
+                    true
+                }
+            }
+            MouseDownSelectionPolicy::Line => {
+                if self.select_line_content_at(position) {
+                    false
+                } else {
+                    self.begin_selection_at(position);
+                    true
+                }
+            }
+        }
+    }
+
+    fn can_mouse_select_yaml_identifier_at(&self, position: TextPosition) -> bool {
+        self.editor
+            .line_text(position.line as usize)
+            .is_some_and(|line_text| {
+                mouse_position_is_on_yaml_identifier(&line_text, position.character)
+            })
     }
 
     pub(crate) fn finish_selection(&mut self) {
@@ -1474,9 +1553,10 @@ impl GpuiEditorComponent {
         result
     }
 
-    fn begin_mouse_selection(&mut self, position: TextPosition) {
-        self.mouse_selecting = true;
-        self.document.begin_selection_at(position);
+    fn handle_mouse_down(&mut self, position: TextPosition, click_count: usize, shift: bool) {
+        self.mouse_selecting =
+            self.document
+                .apply_mouse_down_selection(position, click_count, shift);
         self.reveal_cursor();
     }
 
@@ -2128,7 +2208,11 @@ where
                         event.position,
                     );
                     if let Some(position) = position {
-                        this.editor_component_mut().begin_mouse_selection(position);
+                        this.editor_component_mut().handle_mouse_down(
+                            position,
+                            event.click_count,
+                            event.modifiers.shift,
+                        );
                         cx.notify();
                     }
                 },
@@ -3632,6 +3716,29 @@ struct SearchMatch {
     total: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MouseDownSelectionPolicy {
+    Single,
+    Word,
+    Line,
+    Extend,
+}
+
+pub(crate) fn mouse_down_selection_policy(
+    click_count: usize,
+    shift: bool,
+) -> MouseDownSelectionPolicy {
+    if shift {
+        return MouseDownSelectionPolicy::Extend;
+    }
+
+    match click_count {
+        0 | 1 => MouseDownSelectionPolicy::Single,
+        2 => MouseDownSelectionPolicy::Word,
+        _ => MouseDownSelectionPolicy::Line,
+    }
+}
+
 fn find_next_match(
     text: &str,
     query: &str,
@@ -3697,35 +3804,62 @@ fn identifier_range_at_position(
     line_text: &str,
     cursor_character: u32,
 ) -> Option<TextRange> {
-    let chars: Vec<char> = line_text.chars().collect();
-    if chars.is_empty() {
+    let clusters = display_clusters(line_text);
+    if clusters.is_empty() {
         return None;
     }
 
-    let mut index = (cursor_character as usize).min(chars.len());
-    if index == chars.len() || !is_yaml_identifier_char(chars[index]) {
-        if index == 0 || !is_yaml_identifier_char(chars[index - 1]) {
+    let mut index = clusters
+        .iter()
+        .position(|cluster| cursor_character >= cluster.start && cursor_character < cluster.end)
+        .unwrap_or_else(|| clusters.len() - 1);
+
+    if !is_yaml_identifier_cluster(line_text, clusters[index]) {
+        if index == 0 || !is_yaml_identifier_cluster(line_text, clusters[index - 1]) {
             return None;
         }
         index -= 1;
     }
 
     let mut start = index;
-    while start > 0 && is_yaml_identifier_char(chars[start - 1]) {
+    while start > 0 && is_yaml_identifier_cluster(line_text, clusters[start - 1]) {
         start -= 1;
     }
 
     let mut end = index + 1;
-    while end < chars.len() && is_yaml_identifier_char(chars[end]) {
+    while end < clusters.len() && is_yaml_identifier_cluster(line_text, clusters[end]) {
         end += 1;
     }
 
     (start < end).then(|| {
         TextRange::new(
-            TextPosition::new(line_index, start as u32),
-            TextPosition::new(line_index, end as u32),
+            TextPosition::new(line_index, clusters[start].start),
+            TextPosition::new(line_index, clusters[end - 1].end),
         )
     })
+}
+
+fn mouse_position_is_on_yaml_identifier(line_text: &str, character: u32) -> bool {
+    let line_length = line_text.chars().count() as u32;
+    let Some(cluster) = display_clusters(line_text).into_iter().find(|cluster| {
+        if character >= line_length {
+            cluster.end == line_length
+        } else {
+            character >= cluster.start && character < cluster.end
+        }
+    }) else {
+        return false;
+    };
+
+    is_yaml_identifier_cluster(line_text, cluster)
+}
+
+fn is_yaml_identifier_cluster(line_text: &str, cluster: DisplayCluster) -> bool {
+    line_text
+        .chars()
+        .skip(cluster.start as usize)
+        .take((cluster.end - cluster.start) as usize)
+        .any(is_yaml_identifier_char)
 }
 
 fn is_yaml_identifier_char(ch: char) -> bool {

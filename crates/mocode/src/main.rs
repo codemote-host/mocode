@@ -20,8 +20,8 @@ mod tests {
     use crate::{
         app,
         component::{
-            GpuiEditorDocument, GpuiEditorSaveError, GpuiSearchHighlight, find_bar_label,
-            go_to_line_bar_label,
+            GpuiEditorDocument, GpuiEditorSaveError, GpuiSearchHighlight, MouseDownSelectionPolicy,
+            find_bar_label, go_to_line_bar_label, mouse_down_selection_policy,
         },
         fixtures::{SAMPLE_TITLE, default_fixture, document_by_fixture_id, document_from_fixture},
     };
@@ -1374,13 +1374,155 @@ mod tests {
     }
 
     #[test]
+    fn mouse_double_click_selects_yaml_identifier_token() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "proxy-groups:\n  - name: fallback.group\n",
+            TextPosition::new(0, 0),
+        );
+
+        assert!(document.select_yaml_identifier_at(TextPosition::new(1, 13)));
+
+        assert_eq!(document.selected_text().unwrap(), "fallback.group");
+        assert_eq!(document.cursor, TextPosition::new(1, 24));
+        assert_eq!(document.selection_summary, "2:11 -> 2:25");
+    }
+
+    #[test]
+    fn mouse_double_click_selects_decomposed_grapheme_identifier() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "name: e\u{0301}x\n",
+            TextPosition::new(0, 0),
+        );
+
+        assert!(document.select_yaml_identifier_at(TextPosition::new(0, 6)));
+
+        assert_eq!(document.selected_text().unwrap(), "e\u{0301}x");
+        assert_eq!(document.cursor, TextPosition::new(0, 9));
+        assert_eq!(document.selection_summary, "1:7 -> 1:10");
+    }
+
+    #[test]
+    fn mouse_double_click_selects_cjk_identifier() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "name: 香港节点\n",
+            TextPosition::new(0, 0),
+        );
+
+        assert!(document.select_yaml_identifier_at(TextPosition::new(0, 7)));
+
+        assert_eq!(document.selected_text().unwrap(), "香港节点");
+        assert_eq!(document.cursor, TextPosition::new(0, 10));
+        assert_eq!(document.selection_summary, "1:7 -> 1:11");
+    }
+
+    #[test]
+    fn mouse_double_click_punctuation_falls_back_to_single_click_cursor() {
+        let mut document =
+            GpuiEditorDocument::from_text("scratch.yaml", "name: value\n", TextPosition::new(0, 0));
+
+        document.apply_mouse_down_selection(TextPosition::new(0, 4), 2, false);
+        document.finish_selection();
+
+        assert_eq!(document.cursor, TextPosition::new(0, 4));
+        assert!(document.selected_text().is_none());
+        assert_eq!(document.selection_summary, "<none>");
+    }
+
+    #[test]
+    fn mouse_triple_click_selects_line_content_without_newline() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enhanced-mode: fake-ip\nmode: rule\n",
+            TextPosition::new(0, 0),
+        );
+
+        assert!(document.select_line_content_at(TextPosition::new(1, 5)));
+
+        assert_eq!(
+            document.selected_text().unwrap(),
+            "  enhanced-mode: fake-ip"
+        );
+        assert_eq!(document.cursor, TextPosition::new(1, 24));
+        assert_eq!(document.selection_summary, "2:1 -> 2:25");
+    }
+
+    #[test]
+    fn mouse_triple_click_empty_line_moves_cursor_without_selection() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n\nmode: rule\n",
+            TextPosition::new(0, 0),
+        );
+
+        document.apply_mouse_down_selection(TextPosition::new(1, 0), 3, false);
+        document.finish_selection();
+
+        assert_eq!(document.cursor, TextPosition::new(1, 0));
+        assert!(document.selected_text().is_none());
+        assert_eq!(document.selection_summary, "<none>");
+    }
+
+    #[test]
+    fn shift_click_extends_selection_from_existing_anchor_forward() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enhanced-mode: fake-ip\n",
+            TextPosition::new(1, 2),
+        );
+
+        document.extend_selection_to(TextPosition::new(1, 15));
+
+        assert_eq!(document.selected_text().unwrap(), "enhanced-mode");
+        assert_eq!(document.cursor, TextPosition::new(1, 15));
+        assert_eq!(document.selection_summary, "2:3 -> 2:16");
+    }
+
+    #[test]
+    fn shift_click_extends_selection_from_existing_anchor_reversed() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enhanced-mode: fake-ip\n",
+            TextPosition::new(1, 15),
+        );
+
+        document.extend_selection_to(TextPosition::new(1, 2));
+
+        assert_eq!(document.selected_text().unwrap(), "enhanced-mode");
+        assert_eq!(document.cursor, TextPosition::new(1, 2));
+        assert_eq!(document.selection_summary, "2:3 -> 2:16");
+    }
+
+    #[test]
+    fn mouse_down_selection_policy_maps_click_count_and_shift() {
+        assert_eq!(
+            mouse_down_selection_policy(1, false),
+            MouseDownSelectionPolicy::Single
+        );
+        assert_eq!(
+            mouse_down_selection_policy(2, false),
+            MouseDownSelectionPolicy::Word
+        );
+        assert_eq!(
+            mouse_down_selection_policy(3, false),
+            MouseDownSelectionPolicy::Line
+        );
+        assert_eq!(
+            mouse_down_selection_policy(2, true),
+            MouseDownSelectionPolicy::Extend
+        );
+    }
+
+    #[test]
     fn editor_surface_wires_mouse_drag_selection_handlers() {
         let component_source = include_str!("component.rs");
 
         assert!(component_source.contains(".on_mouse_down("));
         assert!(component_source.contains(".on_mouse_move("));
         assert!(component_source.contains(".on_mouse_up("));
-        assert!(component_source.contains("begin_mouse_selection"));
+        assert!(component_source.contains("apply_mouse_down_selection"));
         assert!(component_source.contains("update_mouse_selection"));
         assert!(component_source.contains("finish_mouse_selection"));
     }
