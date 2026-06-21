@@ -42,6 +42,7 @@ actions!(
         Delete,
         Tab,
         ShiftTab,
+        ToggleComment,
         Left,
         Right,
         SelectLeft,
@@ -259,6 +260,51 @@ impl GpuiEditorDocument {
             self.cursor.line,
             self.cursor.character.saturating_sub(remove_count as u32),
         );
+        self.ime_marked_range = None;
+        self.clear_selection();
+        self.mark_dirty();
+        self.refresh_derived();
+        Ok(())
+    }
+
+    pub(crate) fn toggle_line_comment(&mut self) -> Result<(), EditorError> {
+        let Some((start_line, end_line)) = self.comment_line_range() else {
+            return Ok(());
+        };
+
+        let original_lines = (start_line..=end_line)
+            .filter_map(|line| self.editor.line_text(line as usize))
+            .collect::<Vec<_>>();
+        if original_lines.iter().all(|line| line.trim().is_empty()) {
+            return Ok(());
+        }
+
+        let uncomment = original_lines
+            .iter()
+            .filter(|line| !line.trim().is_empty())
+            .all(|line| line_is_commented(line));
+        let replacement_lines = original_lines
+            .iter()
+            .map(|line| toggle_yaml_line_comment(line, uncomment))
+            .collect::<Vec<_>>();
+        let replacement = replacement_lines.join("\n");
+        let range = TextRange::new(
+            TextPosition::new(start_line, 0),
+            self.editor
+                .line_end_position(end_line as usize)
+                .unwrap_or_else(|| TextPosition::new(end_line, 0)),
+        );
+        let cursor = cursor_after_comment_toggle(
+            self.cursor,
+            start_line,
+            end_line,
+            &original_lines,
+            uncomment,
+        );
+
+        self.editor
+            .apply_edit(TextEdit::replace(range, &replacement))?;
+        self.cursor = cursor;
         self.ime_marked_range = None;
         self.clear_selection();
         self.mark_dirty();
@@ -942,6 +988,32 @@ impl GpuiEditorDocument {
             .collect()
     }
 
+    fn comment_line_range(&self) -> Option<(u32, u32)> {
+        let line_count = self.editor.line_count();
+        if line_count == 0 {
+            return None;
+        }
+
+        let range = self.selected_range().map(ordered_text_range);
+        let start_line = range
+            .as_ref()
+            .map(|range| range.start.line)
+            .unwrap_or(self.cursor.line);
+        let end_line = range
+            .as_ref()
+            .map(|range| {
+                if range.end.character == 0 && range.end.line > range.start.line {
+                    range.end.line - 1
+                } else {
+                    range.end.line
+                }
+            })
+            .unwrap_or(self.cursor.line);
+        let last_line = line_count.saturating_sub(1) as u32;
+
+        Some((start_line.min(last_line), end_line.min(last_line)))
+    }
+
     fn document_end_position(&self) -> TextPosition {
         let last_line = self.editor.line_count().saturating_sub(1);
         self.editor
@@ -1060,6 +1132,11 @@ impl GpuiEditorComponent {
 
     fn insert_tab(&mut self) -> Result<(), EditorError> {
         let result = self.document.insert_tab();
+        self.reveal_if_ok(result)
+    }
+
+    fn toggle_line_comment(&mut self) -> Result<(), EditorError> {
+        let result = self.document.toggle_line_comment();
         self.reveal_if_ok(result)
     }
 
@@ -1252,6 +1329,8 @@ pub(crate) fn bind_editor_keys(cx: &mut App) {
         KeyBinding::new("delete", Delete, Some("MocodeEditor")),
         KeyBinding::new("tab", Tab, Some("MocodeEditor")),
         KeyBinding::new("shift-tab", ShiftTab, Some("MocodeEditor")),
+        KeyBinding::new("cmd-/", ToggleComment, Some("MocodeEditor")),
+        KeyBinding::new("ctrl-/", ToggleComment, Some("MocodeEditor")),
         KeyBinding::new("left", Left, Some("MocodeEditor")),
         KeyBinding::new("right", Right, Some("MocodeEditor")),
         KeyBinding::new("shift-left", SelectLeft, Some("MocodeEditor")),
@@ -1357,6 +1436,13 @@ where
         .on_action(
             cx.listener(|this: &mut T, _: &ShiftTab, _: &mut Window, cx| {
                 if this.editor_component_mut().outdent_current_line().is_ok() {
+                    cx.notify();
+                }
+            }),
+        )
+        .on_action(
+            cx.listener(|this: &mut T, _: &ToggleComment, _: &mut Window, cx| {
+                if this.editor_component_mut().toggle_line_comment().is_ok() {
                     cx.notify();
                 }
             }),
@@ -1993,6 +2079,84 @@ fn auto_indent_for_line_prefix(line_prefix: &str) -> String {
     indent
 }
 
+fn toggle_yaml_line_comment(line: &str, uncomment: bool) -> String {
+    if line.trim().is_empty() {
+        return line.to_string();
+    }
+
+    let indent_len = leading_space_count(line);
+    let indent_byte = char_to_byte_index(line, indent_len as u32);
+
+    if uncomment {
+        let Some(remove_count) = comment_remove_count(line) else {
+            return line.to_string();
+        };
+        let remove_end = indent_byte + remove_count;
+        format!("{}{}", &line[..indent_byte], &line[remove_end..])
+    } else {
+        format!("{}# {}", &line[..indent_byte], &line[indent_byte..])
+    }
+}
+
+fn line_is_commented(line: &str) -> bool {
+    let indent_len = leading_space_count(line);
+    let indent_byte = char_to_byte_index(line, indent_len as u32);
+    line[indent_byte..].starts_with('#')
+}
+
+fn comment_remove_count(line: &str) -> Option<usize> {
+    let indent_len = leading_space_count(line);
+    let indent_byte = char_to_byte_index(line, indent_len as u32);
+    let suffix = &line[indent_byte..];
+
+    if suffix.starts_with("# ") {
+        Some(2)
+    } else if suffix.starts_with('#') {
+        Some(1)
+    } else {
+        None
+    }
+}
+
+fn cursor_after_comment_toggle(
+    cursor: TextPosition,
+    start_line: u32,
+    end_line: u32,
+    original_lines: &[String],
+    uncomment: bool,
+) -> TextPosition {
+    if cursor.line < start_line || cursor.line > end_line {
+        return cursor;
+    }
+
+    let Some(line) = original_lines.get((cursor.line - start_line) as usize) else {
+        return cursor;
+    };
+    if line.trim().is_empty() {
+        return cursor;
+    }
+
+    let indent_len = leading_space_count(line) as u32;
+    if cursor.character < indent_len {
+        return cursor;
+    }
+
+    if uncomment {
+        let Some(remove_count) = comment_remove_count(line) else {
+            return cursor;
+        };
+        TextPosition::new(
+            cursor.line,
+            cursor
+                .character
+                .saturating_sub(remove_count as u32)
+                .max(indent_len),
+        )
+    } else {
+        TextPosition::new(cursor.line, cursor.character + 2)
+    }
+}
+
 fn normalize_pasted_yaml_indentation(text: &str, line_prefix: &str) -> String {
     if !text.contains('\n') {
         return text.to_string();
@@ -2020,6 +2184,10 @@ fn normalize_pasted_yaml_indentation(text: &str, line_prefix: &str) -> String {
 
 fn leading_spaces(text: &str) -> String {
     text.chars().take_while(|ch| *ch == ' ').collect()
+}
+
+fn leading_space_count(text: &str) -> usize {
+    text.chars().take_while(|ch| *ch == ' ').count()
 }
 
 fn strip_trailing_carriage_return(line: &str) -> &str {

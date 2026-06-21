@@ -538,6 +538,82 @@ mod tests {
     }
 
     #[test]
+    fn daily_toggle_comment_comments_current_line_after_indent() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enable: true\n",
+            TextPosition::new(1, 4),
+        );
+
+        document.toggle_line_comment().unwrap();
+
+        assert_eq!(document.line_at(1).unwrap().text, "  # enable: true");
+        assert_eq!(document.cursor, TextPosition::new(1, 6));
+    }
+
+    #[test]
+    fn daily_toggle_comment_uncomments_current_line() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  # enable: true\n",
+            TextPosition::new(1, 6),
+        );
+
+        document.toggle_line_comment().unwrap();
+
+        assert_eq!(document.line_at(1).unwrap().text, "  enable: true");
+        assert_eq!(document.cursor, TextPosition::new(1, 4));
+    }
+
+    #[test]
+    fn daily_toggle_comment_comments_selected_lines() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enable: true\n  enhanced-mode: fake-ip\n",
+            TextPosition::new(1, 2),
+        );
+        document.select_down().unwrap();
+
+        document.toggle_line_comment().unwrap();
+
+        assert_eq!(document.line_at(1).unwrap().text, "  # enable: true");
+        assert_eq!(
+            document.line_at(2).unwrap().text,
+            "  # enhanced-mode: fake-ip"
+        );
+        assert!(document.selected_text().is_none());
+    }
+
+    #[test]
+    fn daily_toggle_comment_uncomments_selected_lines_when_all_are_commented() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  # enable: true\n  # enhanced-mode: fake-ip\n",
+            TextPosition::new(1, 2),
+        );
+        document.select_down().unwrap();
+
+        document.toggle_line_comment().unwrap();
+
+        assert_eq!(document.line_at(1).unwrap().text, "  enable: true");
+        assert_eq!(
+            document.line_at(2).unwrap().text,
+            "  enhanced-mode: fake-ip"
+        );
+        assert!(document.selected_text().is_none());
+    }
+
+    #[test]
+    fn toggle_comment_action_is_bound_to_common_shortcut() {
+        let component_source = include_str!("component.rs");
+
+        assert!(component_source.contains("ToggleComment"));
+        assert!(component_source.contains("KeyBinding::new(\"ctrl-/\""));
+        assert!(component_source.contains("KeyBinding::new(\"cmd-/\""));
+        assert!(component_source.contains("toggle_line_comment().is_ok()"));
+    }
+
+    #[test]
     fn selection_insert_replaces_selected_text() {
         let mut document = GpuiEditorDocument::from_text(
             "scratch.yaml",
