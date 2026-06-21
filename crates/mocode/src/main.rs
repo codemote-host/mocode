@@ -223,6 +223,60 @@ mod tests {
     }
 
     #[test]
+    fn daily_undo_back_to_saved_text_clears_dirty() {
+        let path = write_temp_yaml("undo-clean", "mixed-port: 7890\n");
+        let mut document = GpuiEditorDocument::from_path(&path).unwrap();
+
+        document.insert_text("# temporary\n").unwrap();
+        assert!(document.dirty);
+
+        document.undo().unwrap();
+
+        assert_eq!(document.text(), "mixed-port: 7890\n");
+        assert!(!document.dirty);
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn daily_redo_after_clean_undo_marks_dirty_again() {
+        let path = write_temp_yaml("redo-dirty", "mixed-port: 7890\n");
+        let mut document = GpuiEditorDocument::from_path(&path).unwrap();
+
+        document.insert_text("# temporary\n").unwrap();
+        document.undo().unwrap();
+        assert!(!document.dirty);
+
+        document.redo().unwrap();
+
+        assert_eq!(document.text(), "# temporary\nmixed-port: 7890\n");
+        assert!(document.dirty);
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn daily_save_updates_dirty_baseline() {
+        let path = write_temp_yaml("save-baseline", "mixed-port: 7890\n");
+        let mut document = GpuiEditorDocument::from_path(&path).unwrap();
+
+        document.insert_text("# saved\n").unwrap();
+        document.save_to_original_path().unwrap();
+        assert!(!document.dirty);
+
+        document.insert_text("# transient\n").unwrap();
+        assert!(document.dirty);
+        document.undo().unwrap();
+
+        assert_eq!(document.text(), "# saved\nmixed-port: 7890\n");
+        assert!(!document.dirty);
+
+        let backup_path = GpuiEditorDocument::backup_path_for(&path);
+        fs::remove_file(path).ok();
+        fs::remove_file(backup_path).ok();
+    }
+
+    #[test]
     fn open_action_checks_unsaved_changes_before_file_prompt() {
         let app_source = include_str!("app.rs");
 
@@ -1306,7 +1360,7 @@ mod tests {
         document.undo().unwrap();
         assert_eq!(document.cursor, TextPosition::new(1, 17));
         assert_eq!(document.line_at(1).unwrap().text, "  enhanced-mode: ");
-        assert!(document.dirty);
+        assert!(!document.dirty);
         assert_eq!(document.selection_summary, "<none>");
 
         document.redo().unwrap();
@@ -1315,6 +1369,7 @@ mod tests {
             document.line_at(1).unwrap().text,
             "  enhanced-mode: fake-ip"
         );
+        assert!(document.dirty);
     }
 
     #[test]

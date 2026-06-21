@@ -129,6 +129,7 @@ pub(crate) struct GpuiEditorDocument {
     pub(crate) path_display: String,
     pub(crate) dirty: bool,
     pub(crate) save_status: String,
+    saved_text: String,
     editor: MocodeEditor,
     pub(crate) cursor: TextPosition,
     pub(crate) line_count: usize,
@@ -209,6 +210,7 @@ impl GpuiEditorDocument {
             path_display,
             dirty: false,
             save_status,
+            saved_text: text.to_string(),
             editor,
             cursor: inspect_position,
             line_count: 0,
@@ -977,7 +979,8 @@ impl GpuiEditorDocument {
             });
         }
 
-        if let Err(error) = fs::write(path, self.text()) {
+        let current_text = self.text();
+        if let Err(error) = fs::write(path, &current_text) {
             let message = error.to_string();
             self.save_status = format!("Failed to save {}: {message}", path.display());
             return Err(GpuiEditorSaveError::Io {
@@ -993,6 +996,7 @@ impl GpuiEditorDocument {
             .and_then(|name| name.to_str())
             .map(str::to_string)
             .unwrap_or_else(|| path.display().to_string());
+        self.saved_text = current_text;
         self.dirty = false;
         let verb = if save_as { "Saved as" } else { "Saved" };
         self.save_status = if let Some(backup_path) = backup_path {
@@ -1030,8 +1034,16 @@ impl GpuiEditorDocument {
     }
 
     fn mark_dirty(&mut self) {
-        self.dirty = true;
-        self.save_status = "Modified".to_string();
+        self.refresh_dirty_state();
+        if self.dirty {
+            self.save_status = "Modified".to_string();
+        } else {
+            self.save_status = "No unsaved changes".to_string();
+        }
+    }
+
+    fn refresh_dirty_state(&mut self) {
+        self.dirty = self.text() != self.saved_text;
     }
 
     fn refresh_derived(&mut self) {
