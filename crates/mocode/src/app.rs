@@ -322,6 +322,8 @@ impl Render for MocodeApp {
 
 fn header(editor: &GpuiEditorComponent, cx: &mut Context<'_, MocodeApp>) -> impl IntoElement {
     let document = editor.document();
+    let state_label = document_state_label(document);
+    let activity_label = document_activity_label(document);
     div()
         .flex()
         .flex_row()
@@ -348,11 +350,24 @@ fn header(editor: &GpuiEditorComponent, cx: &mut Context<'_, MocodeApp>) -> impl
                 .text_color(rgb(0x5f6b7a))
                 .text_size(px(12.0))
                 .child(document.path_display.clone())
-                .child(format!(
-                    "{} - {}",
-                    if document.dirty { "dirty" } else { "clean" },
-                    document.save_status
-                )),
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(status_pill(state_label))
+                        .when_some(activity_label, |this, label| {
+                            this.child(
+                                div()
+                                    .max_w(px(420.0))
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(label),
+                            )
+                        }),
+                ),
         )
         .child(command_buttons(cx))
         .child(
@@ -360,6 +375,39 @@ fn header(editor: &GpuiEditorComponent, cx: &mut Context<'_, MocodeApp>) -> impl
                 .text_color(rgb(0x5f6b7a))
                 .child(format!("{} lines", document.line_count)),
         )
+}
+
+pub(crate) fn document_state_label(document: &GpuiEditorDocument) -> &'static str {
+    if document.dirty {
+        "Unsaved"
+    } else if document.path.is_some() {
+        "Saved"
+    } else {
+        "Read-only"
+    }
+}
+
+pub(crate) fn document_activity_label(document: &GpuiEditorDocument) -> Option<String> {
+    match document.save_status.as_str() {
+        "Modified" | "No unsaved changes" => None,
+        status => Some(status.to_string()),
+    }
+}
+
+fn status_pill(label: &'static str) -> impl IntoElement {
+    let (background, foreground) = match label {
+        "Unsaved" => (rgb(0xfff7ed), rgb(0x9a3412)),
+        "Saved" => (rgb(0xecfdf5), rgb(0x047857)),
+        _ => (rgb(0xf1f5f9), rgb(0x475569)),
+    };
+
+    div()
+        .px_2()
+        .py_0p5()
+        .rounded_sm()
+        .bg(background)
+        .text_color(foreground)
+        .child(label)
 }
 
 fn command_buttons(cx: &mut Context<'_, MocodeApp>) -> impl IntoElement {

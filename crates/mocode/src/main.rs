@@ -306,6 +306,53 @@ mod tests {
     }
 
     #[test]
+    fn app_document_state_label_distinguishes_saved_unsaved_and_read_only() {
+        let path = write_temp_yaml("state-label", "mixed-port: 7890\n");
+        let mut saved = GpuiEditorDocument::from_path(&path).unwrap();
+        let read_only = load_app_document();
+
+        assert_eq!(app::document_state_label(&saved), "Saved");
+        assert_eq!(app::document_state_label(&read_only), "Read-only");
+
+        saved.insert_text("# unsaved\n").unwrap();
+
+        assert_eq!(app::document_state_label(&saved), "Unsaved");
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn app_document_activity_label_hides_redundant_modified_state() {
+        let path = write_temp_yaml("activity-label", "mixed-port: 7890\n");
+        let mut document = GpuiEditorDocument::from_path(&path).unwrap();
+
+        document.insert_text("# unsaved\n").unwrap();
+        assert_eq!(document.save_status, "Modified");
+
+        assert_eq!(app::document_activity_label(&document), None);
+
+        document.save_to_original_path().unwrap();
+        assert!(
+            app::document_activity_label(&document)
+                .as_deref()
+                .is_some_and(|label| label.contains("Saved"))
+        );
+
+        let backup_path = GpuiEditorDocument::backup_path_for(&path);
+        fs::remove_file(path).ok();
+        fs::remove_file(backup_path).ok();
+    }
+
+    #[test]
+    fn app_header_uses_compact_document_chrome_helpers() {
+        let app_source = include_str!("app.rs");
+
+        assert!(app_source.contains("document_state_label(document)"));
+        assert!(app_source.contains("document_activity_label(document)"));
+        assert!(!app_source.contains("dirty { \"dirty\" } else { \"clean\" }"));
+    }
+
+    #[test]
     fn normal_editor_shell_does_not_stack_debug_panels() {
         let component_source = include_str!("component.rs");
         let app_source = include_str!("app.rs");
