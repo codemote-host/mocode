@@ -635,6 +635,47 @@ mod tests {
     }
 
     #[test]
+    fn daily_close_completion_popup_suppresses_same_cursor_refresh() {
+        let mut document =
+            GpuiEditorDocument::from_text("scratch.yaml", "mode: \n", TextPosition::new(0, 6));
+
+        assert!(document.completion_popup.is_some());
+        assert!(document.close_completion_popup());
+        assert!(document.completion_popup.is_none());
+
+        document.begin_selection_at(TextPosition::new(0, 6));
+        document.finish_selection();
+
+        assert!(document.completion_popup.is_none());
+    }
+
+    #[test]
+    fn daily_typing_after_closing_completion_popup_allows_new_popup() {
+        let mut document =
+            GpuiEditorDocument::from_text("scratch.yaml", "mode: \n", TextPosition::new(0, 6));
+
+        assert!(document.close_completion_popup());
+        document.insert_text("g").unwrap();
+
+        let popup = document.completion_popup.as_ref().unwrap();
+        assert_eq!(popup.anchor_line, 1);
+        assert_eq!(popup.anchor_column, 8);
+        assert!(popup.items.iter().any(|item| item.label == "global"));
+    }
+
+    #[test]
+    fn daily_closed_completion_popup_is_not_accepted_while_hidden() {
+        let mut document =
+            GpuiEditorDocument::from_text("scratch.yaml", "mode: \n", TextPosition::new(0, 6));
+
+        assert!(document.close_completion_popup());
+
+        assert!(!document.accept_completion().unwrap());
+        assert_eq!(document.line_at(0).unwrap().text, "mode: ");
+        assert_eq!(document.cursor, TextPosition::new(0, 6));
+    }
+
+    #[test]
     fn daily_accept_completion_ignores_plain_blank_indent() {
         let mut document =
             GpuiEditorDocument::from_text("scratch.yaml", "dns:\n  \n", TextPosition::new(1, 2));
@@ -655,6 +696,17 @@ mod tests {
         assert!(component_source.contains("else if this.editor_component_mut().insert_newline()"));
         assert!(component_source.contains("else if this.editor_component_mut().move_down()"));
         assert!(component_source.contains("else if this.editor_component_mut().move_up()"));
+    }
+
+    #[test]
+    fn escape_action_closes_completion_popup_before_search_fallback() {
+        let component_source = include_str!("component.rs");
+
+        assert!(component_source.contains("close_completion_popup()"));
+        assert!(
+            component_source.find("close_completion_popup()").unwrap()
+                < component_source.find("close_search()").unwrap()
+        );
     }
 
     #[test]

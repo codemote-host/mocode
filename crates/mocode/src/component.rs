@@ -137,6 +137,7 @@ pub(crate) struct GpuiEditorDocument {
     pub(crate) completion_labels: Vec<String>,
     pub(crate) completion_items: Vec<GpuiEditorCompletion>,
     pub(crate) completion_popup: Option<GpuiEditorCompletionPopup>,
+    completion_popup_suppressed_at: Option<TextPosition>,
     pub(crate) hover_title: String,
     pub(crate) hover_body: String,
     pub(crate) chain_preview: Option<ProxyChainPreview>,
@@ -205,6 +206,7 @@ impl GpuiEditorDocument {
             completion_labels: Vec::new(),
             completion_items: Vec::new(),
             completion_popup: None,
+            completion_popup_suppressed_at: None,
             hover_title: String::new(),
             hover_body: String::new(),
             chain_preview: None,
@@ -230,6 +232,10 @@ impl GpuiEditorDocument {
     }
 
     pub(crate) fn accept_completion(&mut self) -> Result<bool, EditorError> {
+        if self.completion_popup_suppressed_at == Some(self.cursor) {
+            return Ok(false);
+        }
+
         let Some((prefix, replace_range)) = self.completion_prefix_range() else {
             return Ok(false);
         };
@@ -294,6 +300,16 @@ impl GpuiEditorDocument {
 
     pub(crate) fn select_previous_completion(&mut self) -> bool {
         self.select_completion(CompletionSelection::Previous)
+    }
+
+    pub(crate) fn close_completion_popup(&mut self) -> bool {
+        if self.completion_popup.is_none() {
+            return false;
+        }
+
+        self.completion_popup = None;
+        self.completion_popup_suppressed_at = Some(self.cursor);
+        true
     }
 
     pub(crate) fn commit_text(&mut self, text: &str) -> Result<(), EditorError> {
@@ -1030,6 +1046,12 @@ impl GpuiEditorDocument {
             .iter()
             .map(|completion| completion.label.clone())
             .collect();
+        if self
+            .completion_popup_suppressed_at
+            .is_some_and(|position| position != self.cursor)
+        {
+            self.completion_popup_suppressed_at = None;
+        }
         let selected_index = self
             .completion_popup
             .as_ref()
@@ -1043,13 +1065,17 @@ impl GpuiEditorDocument {
             .completion_prefix_range()
             .map(|(prefix, _)| prefix)
             .unwrap_or_default();
-        self.completion_popup = build_completion_popup(
-            self.cursor,
-            &self.completion_items,
-            selected_index,
-            &completion_prefix,
-            can_accept_empty_completion(&self.current_line_prefix()),
-        );
+        self.completion_popup = if self.completion_popup_suppressed_at == Some(self.cursor) {
+            None
+        } else {
+            build_completion_popup(
+                self.cursor,
+                &self.completion_items,
+                selected_index,
+                &completion_prefix,
+                can_accept_empty_completion(&self.current_line_prefix()),
+            )
+        };
         if let Some(hover) = self.editor.hover_summary_at(self.cursor) {
             self.hover_title = hover.title;
             self.hover_body = hover.body;
@@ -1336,6 +1362,10 @@ impl GpuiEditorComponent {
 
     fn select_previous_completion(&mut self) -> bool {
         self.document.select_previous_completion()
+    }
+
+    fn close_completion_popup(&mut self) -> bool {
+        self.document.close_completion_popup()
     }
 
     fn insert_tab(&mut self) -> Result<(), EditorError> {
@@ -1743,8 +1773,12 @@ where
         )
         .on_action(
             cx.listener(|this: &mut T, _: &EscapeSearch, _: &mut Window, cx| {
-                this.editor_component_mut().close_search();
-                cx.notify();
+                if this.editor_component_mut().close_completion_popup() {
+                    cx.notify();
+                } else {
+                    this.editor_component_mut().close_search();
+                    cx.notify();
+                }
             }),
         )
         .on_action(cx.listener(|this: &mut T, _: &Enter, _: &mut Window, cx| {
