@@ -79,6 +79,7 @@ pub(crate) struct GpuiEditorLine {
     pub(crate) text: String,
     pub(crate) diagnostic_count: usize,
     pub(crate) diagnostic_severity: Option<String>,
+    pub(crate) diagnostic_message: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -751,6 +752,10 @@ impl GpuiEditorDocument {
                 .diagnostics
                 .first()
                 .map(|diagnostic| severity_label(diagnostic.severity).to_string()),
+            diagnostic_message: line
+                .diagnostics
+                .first()
+                .map(|diagnostic| diagnostic.message.clone()),
         })
     }
 
@@ -766,8 +771,20 @@ impl GpuiEditorDocument {
                     .diagnostics
                     .first()
                     .map(|diagnostic| severity_label(diagnostic.severity).to_string()),
+                diagnostic_message: line
+                    .diagnostics
+                    .first()
+                    .map(|diagnostic| diagnostic.message.clone()),
             })
             .collect()
+    }
+
+    pub(crate) fn current_line_diagnostic_summary(&self) -> Option<String> {
+        let cursor_line = self.cursor.line + 1;
+        self.diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.line == Some(cursor_line))
+            .map(|diagnostic| format_diagnostic_summary(&diagnostic.severity, &diagnostic.message))
     }
 
     pub(crate) fn search_highlights_in_range(
@@ -1890,19 +1907,23 @@ where
                         for (offset, line) in slice.into_iter().enumerate() {
                             let index = range.start + offset;
                             let index_u32 = index as u32;
-                            let cursor = (document.cursor.line as usize == index)
-                                .then_some(document.cursor.character);
+                            let current_line = document.cursor.line as usize == index;
+                            let cursor = current_line.then_some(document.cursor.character);
                             let line_selection = selection_range.and_then(|r| {
                                 selection_on_line(index_u32, line.text.chars().count() as u32, r)
                             });
                             let line_search_highlights =
                                 search_highlights.remove(&index_u32).unwrap_or_default();
+                            let diagnostic_hint = current_line
+                                .then(|| document.current_line_diagnostic_summary())
+                                .flatten();
                             rows.push(line_row(
                                 index,
                                 line.number,
                                 line.text,
                                 line.diagnostic_count,
                                 line.diagnostic_severity,
+                                diagnostic_hint,
                                 cursor,
                                 line_selection,
                                 line_search_highlights,
@@ -2248,6 +2269,7 @@ fn line_row(
     text: String,
     diagnostic_count: usize,
     diagnostic_severity: Option<String>,
+    diagnostic_hint: Option<String>,
     cursor: Option<u32>,
     selection: Option<(u32, u32)>,
     search_highlights: Vec<GpuiSearchHighlight>,
@@ -2280,6 +2302,24 @@ fn line_row(
                 })),
         )
         .child(render_line_text(text, cursor, selection, search_highlights))
+        .when_some(diagnostic_hint, |this, hint| {
+            this.child(line_diagnostic_hint(hint))
+        })
+}
+
+fn line_diagnostic_hint(text: String) -> impl IntoElement {
+    div()
+        .ml_3()
+        .max_w(px(520.0))
+        .px_2()
+        .rounded_sm()
+        .bg(rgb(0xfff7ed))
+        .text_color(rgb(0x9a3412))
+        .text_size(px(11.0))
+        .whitespace_nowrap()
+        .overflow_hidden()
+        .text_ellipsis()
+        .child(text)
 }
 
 fn render_line_text(
@@ -3150,6 +3190,10 @@ fn severity_label(severity: DiagnosticSeverity) -> &'static str {
         DiagnosticSeverity::Info => "info",
         DiagnosticSeverity::Hint => "hint",
     }
+}
+
+fn format_diagnostic_summary(severity: &str, message: &str) -> String {
+    format!("{severity}: {message}")
 }
 
 fn completion_kind_label(kind: CompletionKind) -> &'static str {

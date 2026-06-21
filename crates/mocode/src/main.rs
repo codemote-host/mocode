@@ -333,12 +333,52 @@ mod tests {
     }
 
     #[test]
+    fn daily_current_line_diagnostic_summary_shows_reference_error() {
+        let document = GpuiEditorDocument::from_text(
+            "invalid-reference.yaml",
+            include_str!("../../../examples/configs/invalid-reference.yaml"),
+            TextPosition::new(10, 18),
+        );
+
+        let summary = document.current_line_diagnostic_summary().unwrap();
+
+        assert!(summary.starts_with("error: "));
+        assert!(summary.contains("missing-dialer"));
+    }
+
+    #[test]
+    fn daily_line_at_carries_diagnostic_message_for_inline_hint() {
+        let document = GpuiEditorDocument::from_text(
+            "invalid-reference.yaml",
+            include_str!("../../../examples/configs/invalid-reference.yaml"),
+            TextPosition::new(10, 18),
+        );
+        let line = document.line_at(10).unwrap();
+
+        assert_eq!(line.diagnostic_count, 1);
+        assert_eq!(line.diagnostic_severity.as_deref(), Some("error"));
+        assert!(
+            line.diagnostic_message
+                .as_deref()
+                .is_some_and(|message| message.contains("missing-dialer"))
+        );
+    }
+
+    #[test]
     fn diagnostics_strip_is_rendered_with_click_to_jump() {
         let component_source = include_str!("component.rs");
 
         assert!(component_source.contains("diagnostics_strip::<T>(editor.document(), cx)"));
         assert!(component_source.contains("jump_to_diagnostic(index)"));
         assert!(component_source.contains("DiagnosticItem"));
+    }
+
+    #[test]
+    fn editor_surface_renders_current_line_diagnostic_hint() {
+        let component_source = include_str!("component.rs");
+
+        assert!(component_source.contains("line_diagnostic_hint("));
+        assert!(component_source.contains("current_line_diagnostic_summary()"));
     }
 
     #[test]
