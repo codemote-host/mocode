@@ -276,6 +276,58 @@ mod tests {
     }
 
     #[test]
+    fn daily_jump_to_ranged_diagnostic_moves_cursor_to_error() {
+        let mut document = GpuiEditorDocument::from_text(
+            "invalid-yaml.yaml",
+            include_str!("../../../examples/configs/invalid-yaml.yaml"),
+            TextPosition::new(0, 0),
+        );
+        let diagnostic_index = document
+            .diagnostics
+            .iter()
+            .position(|diagnostic| diagnostic.line.is_some() && diagnostic.column.is_some())
+            .unwrap();
+        let diagnostic = document.diagnostics[diagnostic_index].clone();
+
+        assert!(document.jump_to_diagnostic(diagnostic_index));
+
+        assert_eq!(
+            document.cursor,
+            TextPosition::new(
+                diagnostic.line.unwrap().saturating_sub(1),
+                diagnostic.column.unwrap().saturating_sub(1)
+            )
+        );
+        assert_eq!(document.selection_summary, "<none>");
+    }
+
+    #[test]
+    fn daily_jump_to_unranged_diagnostic_returns_false() {
+        let mut document = GpuiEditorDocument::from_text(
+            "invalid-reference.yaml",
+            include_str!("../../../examples/configs/invalid-reference.yaml"),
+            TextPosition::new(0, 0),
+        );
+        let diagnostic_index = document
+            .diagnostics
+            .iter()
+            .position(|diagnostic| diagnostic.line.is_none() && diagnostic.column.is_none())
+            .unwrap();
+
+        assert!(!document.jump_to_diagnostic(diagnostic_index));
+        assert_eq!(document.cursor, TextPosition::new(0, 0));
+    }
+
+    #[test]
+    fn diagnostics_strip_is_rendered_with_click_to_jump() {
+        let component_source = include_str!("component.rs");
+
+        assert!(component_source.contains("diagnostics_strip::<T>(editor.document(), cx)"));
+        assert!(component_source.contains("jump_to_diagnostic(index)"));
+        assert!(component_source.contains("DiagnosticItem"));
+    }
+
+    #[test]
     fn carries_hover_summary_for_current_position() {
         let document = GpuiEditorDocument::from_text(
             "tun.yaml",

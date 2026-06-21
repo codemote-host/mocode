@@ -262,6 +262,31 @@ impl GpuiEditorDocument {
         self.accept_completion()
     }
 
+    pub(crate) fn jump_to_diagnostic(&mut self, index: usize) -> bool {
+        let Some(diagnostic) = self.diagnostics.get(index).cloned() else {
+            return false;
+        };
+        let (Some(line), Some(column)) = (diagnostic.line, diagnostic.column) else {
+            return false;
+        };
+        if self.line_count == 0 {
+            return false;
+        }
+
+        let line = line.saturating_sub(1).min(self.line_count as u32 - 1);
+        let column = column.saturating_sub(1);
+        let line_end = self
+            .editor
+            .line_end_position(line as usize)
+            .unwrap_or_else(|| TextPosition::new(line, 0));
+        self.cursor = TextPosition::new(line, column.min(line_end.character));
+        self.ime_marked_range = None;
+        self.clear_selection();
+        self.completion_popup = None;
+        self.refresh_derived();
+        true
+    }
+
     pub(crate) fn select_next_completion(&mut self) -> bool {
         self.select_completion(CompletionSelection::Next)
     }
@@ -1280,6 +1305,14 @@ impl GpuiEditorComponent {
         Ok(accepted)
     }
 
+    fn jump_to_diagnostic(&mut self, index: usize) -> bool {
+        let jumped = self.document.jump_to_diagnostic(index);
+        if jumped {
+            self.reveal_cursor();
+        }
+        jumped
+    }
+
     fn select_next_completion(&mut self) -> bool {
         self.document.select_next_completion()
     }
@@ -1545,6 +1578,10 @@ where
         .flex_col()
         .h_full()
         .child(editor_surface(editor, window, cx))
+        .when_some(
+            diagnostics_strip::<T>(editor.document(), cx),
+            |this, strip| this.child(strip),
+        )
         .child(status_bar(editor.document()))
 }
 
@@ -2039,6 +2076,92 @@ where
                         .accept_completion_at(index)
                         .is_ok_and(|accepted| accepted)
                     {
+                        cx.notify();
+                    }
+                },
+            ),
+        )
+        .into_any_element()
+}
+
+fn diagnostics_strip<T>(
+    document: &GpuiEditorDocument,
+    cx: &mut Context<'_, T>,
+) -> Option<AnyElement>
+where
+    T: GpuiEditorHost + EntityInputHandler + 'static,
+{
+    if document.diagnostics.is_empty() {
+        return None;
+    }
+
+    let mut items = Vec::new();
+    for (index, diagnostic) in document.diagnostics.iter().take(5).enumerate() {
+        items.push(diagnostic_item::<T>(index, diagnostic, cx));
+    }
+
+    Some(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_1()
+            .border_t_1()
+            .border_color(rgb(0xfecaca))
+            .bg(rgb(0xfffbeb))
+            .children(items)
+            .into_any_element(),
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiagnosticItemState {
+    DiagnosticItem,
+}
+
+fn diagnostic_item<T>(
+    index: usize,
+    diagnostic: &GpuiEditorDiagnostic,
+    cx: &mut Context<'_, T>,
+) -> AnyElement
+where
+    T: GpuiEditorHost + EntityInputHandler + 'static,
+{
+    let state = DiagnosticItemState::DiagnosticItem;
+    let border_color = match state {
+        DiagnosticItemState::DiagnosticItem => rgb(0xfbbf24),
+    };
+    let location = diagnostic
+        .line
+        .zip(diagnostic.column)
+        .map(|(line, column)| format!("{}:{}", line, column))
+        .unwrap_or_else(|| "global".to_string());
+    let text = format!(
+        "{} {} {}",
+        diagnostic.severity, location, diagnostic.message
+    );
+
+    div()
+        .max_w(px(520.0))
+        .px_2()
+        .py_0p5()
+        .rounded_sm()
+        .border_1()
+        .border_color(border_color)
+        .bg(rgb(0xffffff))
+        .text_color(rgb(0x78350f))
+        .text_size(px(11.0))
+        .whitespace_nowrap()
+        .overflow_hidden()
+        .text_ellipsis()
+        .child(text)
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(
+                move |this: &mut T, _: &MouseDownEvent, _: &mut Window, cx| {
+                    if this.editor_component_mut().jump_to_diagnostic(index) {
                         cx.notify();
                     }
                 },
