@@ -317,10 +317,26 @@ mod tests {
         let popup = document.completion_popup.as_ref().unwrap();
         assert_eq!(popup.anchor_line, 4);
         assert_eq!(popup.anchor_column, 19);
+        assert_eq!(popup.left_px, 199.0);
+        assert_eq!(popup.top_px, 88.0);
         assert_eq!(popup.selected_index, 0);
         assert!(popup.items.iter().any(|item| item.label == "exit"
             && item.insert_text == "exit"
             && item.kind == "reference"));
+    }
+
+    #[test]
+    fn completion_popup_tracks_selected_item_for_rendering() {
+        let mut document =
+            GpuiEditorDocument::from_text("scratch.yaml", "mode: \n", TextPosition::new(0, 6));
+
+        document.select_next_completion();
+
+        let popup = document.completion_popup.as_ref().unwrap();
+        assert_eq!(popup.selected_index, 1);
+        assert_eq!(popup.items[popup.selected_index].label, "global");
+        assert_eq!(popup.left_px, 109.0);
+        assert_eq!(popup.top_px, 22.0);
     }
 
     #[test]
@@ -511,6 +527,16 @@ mod tests {
         assert!(component_source.contains("else if this.editor_component_mut().insert_newline()"));
         assert!(component_source.contains("else if this.editor_component_mut().move_down()"));
         assert!(component_source.contains("else if this.editor_component_mut().move_up()"));
+    }
+
+    #[test]
+    fn editor_surface_renders_inline_completion_popup() {
+        let component_source = include_str!("component.rs");
+
+        assert!(component_source.contains("completion_popup(document.completion_popup.as_ref())"));
+        assert!(component_source.contains("CompletionItemSelected"));
+        assert!(component_source.contains("popup.left_px"));
+        assert!(component_source.contains("popup.top_px"));
     }
 
     #[test]

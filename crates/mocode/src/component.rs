@@ -98,10 +98,12 @@ pub(crate) struct GpuiEditorCompletion {
     pub(crate) documentation: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct GpuiEditorCompletionPopup {
     pub(crate) anchor_line: u32,
     pub(crate) anchor_column: u32,
+    pub(crate) left_px: f32,
+    pub(crate) top_px: f32,
     pub(crate) selected_index: usize,
     pub(crate) items: Vec<GpuiEditorCompletion>,
 }
@@ -1525,7 +1527,8 @@ fn editor_surface<T>(
 where
     T: GpuiEditorHost + EntityInputHandler + 'static,
 {
-    let line_count = editor.document().line_count;
+    let document = editor.document();
+    let line_count = document.line_count;
     let line_list_bounds = editor.line_list_bounds_handle();
     let scroll_handle = editor.scroll_handle();
     let focus_handle = editor.focus_handle().clone();
@@ -1863,6 +1866,10 @@ where
             .left_0()
             .size_full(),
         )
+        .when_some(
+            completion_popup(document.completion_popup.as_ref()),
+            |this, popup| this.child(popup),
+        )
 }
 
 fn status_bar(document: &GpuiEditorDocument) -> impl IntoElement {
@@ -1905,6 +1912,76 @@ fn status_item(text: String) -> impl IntoElement {
         .overflow_hidden()
         .text_ellipsis()
         .child(text)
+}
+
+fn completion_popup(popup: Option<&GpuiEditorCompletionPopup>) -> Option<AnyElement> {
+    let popup = popup?;
+
+    Some(
+        div()
+            .absolute()
+            .left(px(popup.left_px))
+            .top(px(popup.top_px))
+            .w(px(300.0))
+            .rounded_sm()
+            .border_1()
+            .border_color(rgb(0xcbd5e1))
+            .bg(rgb(0xffffff))
+            .overflow_hidden()
+            .children(
+                popup.items.iter().enumerate().map(|(index, item)| {
+                    completion_popup_item(item, index == popup.selected_index)
+                }),
+            )
+            .into_any_element(),
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompletionPopupItemState {
+    CompletionItemSelected,
+    CompletionItem,
+}
+
+fn completion_popup_item(item: &GpuiEditorCompletion, selected: bool) -> impl IntoElement {
+    let state = if selected {
+        CompletionPopupItemState::CompletionItemSelected
+    } else {
+        CompletionPopupItemState::CompletionItem
+    };
+    let background = match state {
+        CompletionPopupItemState::CompletionItemSelected => rgb(0xe0f2fe),
+        CompletionPopupItemState::CompletionItem => rgb(0xffffff),
+    };
+    let text_color = match state {
+        CompletionPopupItemState::CompletionItemSelected => rgb(0x0f172a),
+        CompletionPopupItemState::CompletionItem => rgb(0x334155),
+    };
+
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap_2()
+        .px_2()
+        .py_1()
+        .bg(background)
+        .text_color(text_color)
+        .text_size(px(12.0))
+        .child(
+            div()
+                .flex_1()
+                .overflow_hidden()
+                .text_ellipsis()
+                .child(item.label.clone()),
+        )
+        .child(
+            div()
+                .text_size(px(10.0))
+                .text_color(rgb(0x64748b))
+                .child(item.kind.clone()),
+        )
 }
 
 pub(crate) fn find_bar_label(document: &GpuiEditorDocument) -> Option<String> {
@@ -2656,9 +2733,19 @@ fn build_completion_popup(
     (!visible_items.is_empty()).then(|| GpuiEditorCompletionPopup {
         anchor_line: cursor.line + 1,
         anchor_column: cursor.character + 1,
+        left_px: completion_popup_left(cursor),
+        top_px: completion_popup_top(cursor),
         selected_index,
         items: visible_items,
     })
+}
+
+fn completion_popup_left(cursor: TextPosition) -> f32 {
+    GUTTER_WIDTH_PX + cursor.character as f32 * CHAR_WIDTH_PX
+}
+
+fn completion_popup_top(cursor: TextPosition) -> f32 {
+    (cursor.line as f32 + 1.0) * LINE_HEIGHT_PX
 }
 
 fn visible_completion_items(
