@@ -1446,6 +1446,77 @@ mod tests {
     }
 
     #[test]
+    fn daily_select_next_match_selects_identifier_at_cursor() {
+        let mut document = GpuiEditorDocument::from_text(
+            "select.yaml",
+            "mode: rule\nmode: global",
+            TextPosition::new(0, 1),
+        );
+
+        assert!(document.select_next_match());
+
+        assert_eq!(document.selected_text().unwrap(), "mode");
+        assert_eq!(document.cursor, TextPosition::new(0, 4));
+        assert_eq!(document.selection_summary, "1:1 -> 1:5");
+    }
+
+    #[test]
+    fn daily_select_next_match_moves_to_next_occurrence() {
+        let mut document = GpuiEditorDocument::from_text(
+            "select.yaml",
+            "mode: rule\nmode: global",
+            TextPosition::new(0, 1),
+        );
+
+        assert!(document.select_next_match());
+        assert!(document.select_next_match());
+
+        assert_eq!(document.selected_text().unwrap(), "mode");
+        assert_eq!(document.cursor, TextPosition::new(1, 4));
+        assert_eq!(document.selection_summary, "2:1 -> 2:5");
+    }
+
+    #[test]
+    fn daily_select_next_match_keeps_manual_selection_text() {
+        let mut document = GpuiEditorDocument::from_text(
+            "select.yaml",
+            "proxy one\nproxy two\nproxy one",
+            TextPosition::new(0, 0),
+        );
+        for _ in 0..9 {
+            document.select_right().unwrap();
+        }
+
+        assert_eq!(document.selected_text().unwrap(), "proxy one");
+
+        assert!(document.select_next_match());
+
+        assert_eq!(document.selected_text().unwrap(), "proxy one");
+        assert_eq!(document.cursor, TextPosition::new(2, 9));
+        assert_eq!(document.selection_summary, "3:1 -> 3:10");
+    }
+
+    #[test]
+    fn daily_select_next_match_returns_false_without_identifier() {
+        let mut document =
+            GpuiEditorDocument::from_text("select.yaml", "mode: rule", TextPosition::new(0, 5));
+
+        assert!(!document.select_next_match());
+        assert!(document.selected_text().is_none());
+        assert_eq!(document.cursor, TextPosition::new(0, 5));
+    }
+
+    #[test]
+    fn select_next_match_action_is_bound_to_common_shortcut() {
+        let component_source = include_str!("component.rs");
+
+        assert!(component_source.contains("SelectNextMatch"));
+        assert!(component_source.contains("KeyBinding::new(\"ctrl-d\", SelectNextMatch"));
+        assert!(component_source.contains("KeyBinding::new(\"cmd-d\", SelectNextMatch"));
+        assert!(component_source.contains("select_next_match()"));
+    }
+
+    #[test]
     fn daily_go_to_line_jumps_to_requested_line() {
         let mut document = GpuiEditorDocument::from_text(
             "jump.yaml",

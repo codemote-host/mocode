@@ -48,6 +48,7 @@ actions!(
         SelectLeft,
         SelectRight,
         SelectAll,
+        SelectNextMatch,
         SelectLineStart,
         SelectLineEnd,
         Up,
@@ -498,6 +499,43 @@ impl GpuiEditorDocument {
         self.ime_marked_range = None;
         self.refresh_derived();
         Ok(())
+    }
+
+    pub(crate) fn select_next_match(&mut self) -> bool {
+        self.search_active = false;
+        self.go_to_line_active = false;
+        self.completion_popup = None;
+
+        if let Some(range) = self.selected_range().map(ordered_text_range) {
+            let Ok(query) = self.editor.text_in_range(range) else {
+                return false;
+            };
+            if query.is_empty() {
+                return false;
+            }
+
+            let Some(search_match) =
+                find_next_match(&self.text(), &query, self.cursor, Some(range))
+            else {
+                return false;
+            };
+            if search_match.range == range {
+                return false;
+            }
+
+            self.selection_anchor = Some(search_match.range.start);
+            self.cursor = search_match.range.end;
+            self.refresh_derived();
+            return true;
+        }
+
+        let Some(range) = self.current_identifier_range() else {
+            return false;
+        };
+        self.selection_anchor = Some(range.start);
+        self.cursor = range.end;
+        self.refresh_derived();
+        true
     }
 
     pub(crate) const PAGE_LINES: u32 = 25;
@@ -1213,6 +1251,11 @@ impl GpuiEditorDocument {
             .collect()
     }
 
+    fn current_identifier_range(&self) -> Option<TextRange> {
+        let line_text = self.editor.line_text(self.cursor.line as usize)?;
+        identifier_range_at_position(self.cursor.line, &line_text, self.cursor.character)
+    }
+
     fn completion_prefix_range(&self) -> Option<(String, TextRange)> {
         let line_text = self.editor.line_text(self.cursor.line as usize)?;
         let line_len = line_text.chars().count() as u32;
@@ -1524,6 +1567,14 @@ impl GpuiEditorComponent {
         self.reveal_if_ok(result)
     }
 
+    fn select_next_match(&mut self) -> bool {
+        let selected = self.document.select_next_match();
+        if selected {
+            self.reveal_cursor();
+        }
+        selected
+    }
+
     fn move_up(&mut self) -> Result<(), EditorError> {
         let result = self.document.move_up();
         self.reveal_if_ok(result)
@@ -1699,6 +1750,8 @@ pub(crate) fn bind_editor_keys(cx: &mut App) {
         KeyBinding::new("shift-right", SelectRight, Some("MocodeEditor")),
         KeyBinding::new("cmd-a", SelectAll, Some("MocodeEditor")),
         KeyBinding::new("ctrl-a", SelectAll, Some("MocodeEditor")),
+        KeyBinding::new("cmd-d", SelectNextMatch, Some("MocodeEditor")),
+        KeyBinding::new("ctrl-d", SelectNextMatch, Some("MocodeEditor")),
         KeyBinding::new("up", Up, Some("MocodeEditor")),
         KeyBinding::new("down", Down, Some("MocodeEditor")),
         KeyBinding::new("shift-up", SelectUp, Some("MocodeEditor")),
@@ -1863,6 +1916,13 @@ where
         .on_action(
             cx.listener(|this: &mut T, _: &SelectAll, _: &mut Window, cx| {
                 if this.editor_component_mut().select_all().is_ok() {
+                    cx.notify();
+                }
+            }),
+        )
+        .on_action(
+            cx.listener(|this: &mut T, _: &SelectNextMatch, _: &mut Window, cx| {
+                if this.editor_component_mut().select_next_match() {
                     cx.notify();
                 }
             }),
@@ -3247,6 +3307,46 @@ fn match_start_indices(text: &str, query: &str) -> Vec<usize> {
 
 fn parse_go_to_line_query(query: &str) -> Option<usize> {
     query.parse::<usize>().ok().filter(|line| *line > 0)
+}
+
+fn identifier_range_at_position(
+    line_index: u32,
+    line_text: &str,
+    cursor_character: u32,
+) -> Option<TextRange> {
+    let chars: Vec<char> = line_text.chars().collect();
+    if chars.is_empty() {
+        return None;
+    }
+
+    let mut index = (cursor_character as usize).min(chars.len());
+    if index == chars.len() || !is_yaml_identifier_char(chars[index]) {
+        if index == 0 || !is_yaml_identifier_char(chars[index - 1]) {
+            return None;
+        }
+        index -= 1;
+    }
+
+    let mut start = index;
+    while start > 0 && is_yaml_identifier_char(chars[start - 1]) {
+        start -= 1;
+    }
+
+    let mut end = index + 1;
+    while end < chars.len() && is_yaml_identifier_char(chars[end]) {
+        end += 1;
+    }
+
+    (start < end).then(|| {
+        TextRange::new(
+            TextPosition::new(line_index, start as u32),
+            TextPosition::new(line_index, end as u32),
+        )
+    })
+}
+
+fn is_yaml_identifier_char(ch: char) -> bool {
+    ch.is_alphanumeric() || matches!(ch, '_' | '-' | '.')
 }
 
 fn build_search_match(
