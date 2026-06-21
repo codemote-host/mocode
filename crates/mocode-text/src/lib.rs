@@ -594,6 +594,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn cjk_ranges_use_unicode_scalar_character_positions() {
+        let mut buffer = TextBuffer::open_text("name: 香港节点\n");
+
+        assert_eq!(buffer.line_end_position(0), Some(TextPosition::new(0, 10)));
+        assert_eq!(
+            buffer
+                .text_in_range(TextRange::new(
+                    TextPosition::new(0, 6),
+                    TextPosition::new(0, 10)
+                ))
+                .unwrap(),
+            "香港节点"
+        );
+
+        buffer
+            .apply_edit(TextEdit::replace(
+                TextRange::new(TextPosition::new(0, 6), TextPosition::new(0, 10)),
+                "台湾节点",
+            ))
+            .unwrap();
+
+        assert_eq!(buffer.as_string(), "name: 台湾节点\n");
+        assert_eq!(buffer.line_end_position(0), Some(TextPosition::new(0, 10)));
+    }
+
     // ── vertical navigation ──
 
     #[test]

@@ -14,6 +14,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
+    use gpui::{Bounds, point, px};
     use mocode_api::{ProxyChainStatus, SyntaxHighlightKind, TextPosition};
 
     use crate::{
@@ -1132,6 +1133,81 @@ mod tests {
         assert_eq!(document.line_at(1).unwrap().text, "  - name: 香港节点");
         assert_eq!(document.cursor, TextPosition::new(1, 14));
         assert!(document.selected_text().is_none());
+    }
+
+    #[test]
+    fn cjk_selection_copy_delete_and_replace_uses_character_columns() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "proxies:\n  - name: 香港节点\n",
+            TextPosition::new(1, 10),
+        );
+
+        for _ in 0.."香港节点".chars().count() {
+            document.select_right().unwrap();
+        }
+
+        assert_eq!(document.selected_text().unwrap(), "香港节点");
+        assert_eq!(document.copy_selection_text().unwrap(), "香港节点");
+        assert_eq!(document.selection_summary, "2:11 -> 2:15");
+
+        document.delete().unwrap();
+        assert_eq!(document.line_at(1).unwrap().text, "  - name: ");
+        assert_eq!(document.cursor, TextPosition::new(1, 10));
+
+        document.insert_text("台湾节点").unwrap();
+        assert_eq!(document.line_at(1).unwrap().text, "  - name: 台湾节点");
+        assert_eq!(document.cursor, TextPosition::new(1, 14));
+    }
+
+    #[test]
+    fn ime_preedit_commit_replaces_cjk_selection_without_leaking_marked_text() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "proxies:\n  - name: 旧节点\n",
+            TextPosition::new(1, 10),
+        );
+
+        for _ in 0.."旧节点".chars().count() {
+            document.select_right().unwrap();
+        }
+        let (selected_utf16, _) = document.selected_utf16_range();
+
+        document
+            .replace_and_mark_utf16_range(Some(selected_utf16), "xianggang", Some(9..9))
+            .unwrap();
+        assert_eq!(document.line_at(1).unwrap().text, "  - name: xianggang");
+        assert_eq!(document.marked_utf16_range(), Some(19..28));
+        assert!(document.selected_text().is_none());
+
+        document.replace_utf16_range(None, "香港节点").unwrap();
+
+        assert_eq!(document.line_at(1).unwrap().text, "  - name: 香港节点");
+        assert_eq!(document.cursor, TextPosition::new(1, 14));
+        assert_eq!(document.marked_utf16_range(), None);
+        assert!(document.selected_text().is_none());
+    }
+
+    #[test]
+    fn cjk_bounds_for_utf16_range_use_painted_character_widths() {
+        let document =
+            GpuiEditorDocument::from_text("scratch.yaml", "a中b\n", TextPosition::new(0, 2));
+        let bounds = Bounds::from_corners(point(px(0.0), px(0.0)), point(px(400.0), px(200.0)));
+
+        let range_bounds = document.bounds_for_utf16_range(2..2, bounds).unwrap();
+
+        assert_eq!(f32::from(range_bounds.left()), 64.0 + 7.5 + 15.0);
+    }
+
+    #[test]
+    fn grapheme_bounds_for_utf16_range_do_not_split_combining_mark() {
+        let document =
+            GpuiEditorDocument::from_text("scratch.yaml", "e\u{0301}x\n", TextPosition::new(0, 1));
+        let bounds = Bounds::from_corners(point(px(0.0), px(0.0)), point(px(400.0), px(200.0)));
+
+        let range_bounds = document.bounds_for_utf16_range(1..1, bounds).unwrap();
+
+        assert_eq!(f32::from(range_bounds.left()), 64.0);
     }
 
     #[test]

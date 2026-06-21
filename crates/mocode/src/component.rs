@@ -741,13 +741,27 @@ impl GpuiEditorDocument {
         if position.line as usize >= self.line_count {
             return None;
         }
+        let end_position = self.position_for_utf16_index(range_utf16.end);
+        let line_text = self
+            .editor
+            .line_text(position.line as usize)
+            .unwrap_or_default();
+        let start_x = line_x_for_character(&line_text, position.character, CHAR_WIDTH_PX);
+        let end_x =
+            if end_position.line == position.line && end_position.character > position.character {
+                line_x_for_character(&line_text, end_position.character, CHAR_WIDTH_PX)
+            } else {
+                start_x + CHAR_WIDTH_PX
+            };
 
-        let left =
-            element_bounds.left() + px(GUTTER_WIDTH_PX + position.character as f32 * CHAR_WIDTH_PX);
+        let left = element_bounds.left() + px(GUTTER_WIDTH_PX + start_x);
         let top = element_bounds.top() + px(position.line as f32 * LINE_HEIGHT_PX);
         Some(Bounds::from_corners(
             point(left, top),
-            point(left + px(CHAR_WIDTH_PX), top + px(LINE_HEIGHT_PX)),
+            point(
+                left + px((end_x - start_x).max(CHAR_WIDTH_PX)),
+                top + px(LINE_HEIGHT_PX),
+            ),
         ))
     }
 
@@ -769,12 +783,7 @@ impl GpuiEditorDocument {
             CHAR_WIDTH_PX,
             LINE_HEIGHT_PX,
             self.line_count,
-            |line| {
-                self.editor
-                    .line_end_position(line as usize)
-                    .map(|position| position.character)
-                    .unwrap_or(0)
-            },
+            |line| self.editor.line_text(line as usize),
         )?;
         Some(self.utf16_index_for_position(position))
     }
@@ -1225,6 +1234,10 @@ impl GpuiEditorDocument {
         } else {
             build_completion_popup(
                 self.cursor,
+                &self
+                    .editor
+                    .line_text(self.cursor.line as usize)
+                    .unwrap_or_default(),
                 &self.completion_items,
                 selected_index,
                 &completion_prefix,
@@ -2710,6 +2723,9 @@ fn render_text_segments(
     let line_length = text.chars().count() as u32;
     let mut children = Vec::new();
     let mut cursor_inserted = false;
+    let cursor = cursor.map(|cursor| cluster_start_boundary_for_character(text, cursor));
+    let highlights = normalize_text_highlight_ranges(text, highlights);
+    let syntax_highlights = normalize_syntax_highlight_ranges(text, syntax_highlights);
 
     let mut boundaries = vec![0, line_length];
     for highlight in &highlights {
@@ -2720,8 +2736,7 @@ fn render_text_segments(
         boundaries.push(highlight.start.min(line_length));
         boundaries.push(highlight.end.min(line_length));
     }
-    boundaries.sort_unstable();
-    boundaries.dedup();
+    let boundaries = normalized_text_boundaries(text, boundaries);
 
     for window in boundaries.windows(2) {
         let start = window[0];
@@ -3045,6 +3060,202 @@ fn char_to_byte_index(text: &str, char_index: u32) -> usize {
         .unwrap_or(text.len())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DisplayCluster {
+    start: u32,
+    end: u32,
+    width_cells: u32,
+}
+
+fn display_clusters(line_text: &str) -> Vec<DisplayCluster> {
+    let mut clusters = Vec::<DisplayCluster>::new();
+
+    for (index, ch) in line_text.chars().enumerate() {
+        let index = index as u32;
+        if is_zero_width_mark(ch)
+            && let Some(cluster) = clusters.last_mut()
+        {
+            cluster.end = index + 1;
+            continue;
+        }
+
+        clusters.push(DisplayCluster {
+            start: index,
+            end: index + 1,
+            width_cells: display_cell_width(ch),
+        });
+    }
+
+    clusters
+}
+
+fn normalized_text_boundaries(line_text: &str, boundaries: Vec<u32>) -> Vec<u32> {
+    let mut normalized = boundaries
+        .into_iter()
+        .map(|boundary| cluster_start_boundary_for_character(line_text, boundary))
+        .collect::<Vec<_>>();
+    normalized.push(line_text.chars().count() as u32);
+    normalized.sort_unstable();
+    normalized.dedup();
+    normalized
+}
+
+fn cluster_start_boundary_for_character(line_text: &str, character: u32) -> u32 {
+    let line_length = line_text.chars().count() as u32;
+    let character = character.min(line_length);
+    display_clusters(line_text)
+        .into_iter()
+        .find(|cluster| character > cluster.start && character < cluster.end)
+        .map(|cluster| cluster.start)
+        .unwrap_or(character)
+}
+
+fn cluster_end_boundary_for_character(line_text: &str, character: u32) -> u32 {
+    let line_length = line_text.chars().count() as u32;
+    let character = character.min(line_length);
+    display_clusters(line_text)
+        .into_iter()
+        .find(|cluster| character > cluster.start && character < cluster.end)
+        .map(|cluster| cluster.end)
+        .unwrap_or(character)
+}
+
+fn normalize_text_highlight_ranges(
+    line_text: &str,
+    highlights: Vec<TextHighlight>,
+) -> Vec<TextHighlight> {
+    let normalized = highlights
+        .into_iter()
+        .filter_map(|highlight| {
+            let start = cluster_start_boundary_for_character(line_text, highlight.start);
+            let end = cluster_end_boundary_for_character(line_text, highlight.end);
+            (start < end).then_some(TextHighlight {
+                start,
+                end,
+                kind: highlight.kind,
+            })
+        })
+        .collect::<Vec<_>>();
+    let selections = normalized
+        .iter()
+        .copied()
+        .filter(|highlight| highlight.kind == TextHighlightKind::Selection)
+        .collect::<Vec<_>>();
+
+    let mut highlights = normalized
+        .into_iter()
+        .filter(|highlight| {
+            highlight.kind == TextHighlightKind::Selection
+                || selections
+                    .iter()
+                    .all(|selection| !text_highlights_overlap(*highlight, *selection))
+        })
+        .collect::<Vec<_>>();
+    highlights.sort_by_key(|highlight| {
+        (
+            highlight.start,
+            highlight.end,
+            text_highlight_priority(highlight.kind),
+        )
+    });
+    highlights
+}
+
+fn normalize_syntax_highlight_ranges(
+    line_text: &str,
+    highlights: Vec<TextSyntaxHighlight>,
+) -> Vec<TextSyntaxHighlight> {
+    highlights
+        .into_iter()
+        .filter_map(|highlight| {
+            let start = cluster_start_boundary_for_character(line_text, highlight.start);
+            let end = cluster_end_boundary_for_character(line_text, highlight.end);
+            (start < end).then_some(TextSyntaxHighlight {
+                start,
+                end,
+                kind: highlight.kind,
+            })
+        })
+        .collect()
+}
+
+fn character_for_line_x(line_text: &str, text_x: f32, char_width: f32) -> u32 {
+    if text_x <= 0.0 {
+        return 0;
+    }
+
+    let mut x = 0.0;
+    for cluster in display_clusters(line_text) {
+        let next_x = x + cluster.width_cells as f32 * char_width;
+        if text_x < next_x {
+            return cluster.start;
+        }
+        x = next_x;
+    }
+
+    line_text.chars().count() as u32
+}
+
+fn line_x_for_character(line_text: &str, character: u32, char_width: f32) -> f32 {
+    let character = cluster_start_boundary_for_character(line_text, character);
+    display_clusters(line_text)
+        .into_iter()
+        .take_while(|cluster| cluster.end <= character)
+        .map(|cluster| cluster.width_cells as f32 * char_width)
+        .sum()
+}
+
+fn display_cell_width(ch: char) -> u32 {
+    if is_zero_width_mark(ch) {
+        0
+    } else if is_wide_char(ch) {
+        2
+    } else {
+        1
+    }
+}
+
+fn text_highlights_overlap(left: TextHighlight, right: TextHighlight) -> bool {
+    left.start < right.end && right.start < left.end
+}
+
+fn text_highlight_priority(kind: TextHighlightKind) -> u8 {
+    match kind {
+        TextHighlightKind::Selection => 0,
+        TextHighlightKind::ActiveSearch => 1,
+        TextHighlightKind::Search => 2,
+    }
+}
+
+fn is_zero_width_mark(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{0300}'..='\u{036f}'
+            | '\u{1ab0}'..='\u{1aff}'
+            | '\u{1dc0}'..='\u{1dff}'
+            | '\u{20d0}'..='\u{20ff}'
+            | '\u{3099}'..='\u{309a}'
+            | '\u{fe20}'..='\u{fe2f}'
+    )
+}
+
+fn is_wide_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{1100}'..='\u{115f}'
+            | '\u{2329}'
+            | '\u{232a}'
+            | '\u{2e80}'..='\u{a4cf}'
+            | '\u{ac00}'..='\u{d7a3}'
+            | '\u{f900}'..='\u{faff}'
+            | '\u{fe10}'..='\u{fe19}'
+            | '\u{fe30}'..='\u{fe6f}'
+            | '\u{ff00}'..='\u{ff60}'
+            | '\u{ffe0}'..='\u{ffe6}'
+            | '\u{20000}'..='\u{3fffd}'
+    )
+}
+
 fn mouse_event_text_position(
     document: &GpuiEditorDocument,
     line_list_bounds: Option<Bounds<Pixels>>,
@@ -3065,13 +3276,7 @@ fn mouse_event_text_position(
         CHAR_WIDTH_PX,
         LINE_HEIGHT_PX,
         document.line_count,
-        |line| {
-            document
-                .editor
-                .line_end_position(line as usize)
-                .map(|pos| pos.character)
-                .unwrap_or(0)
-        },
+        |line| document.editor.line_text(line as usize),
     )
 }
 
@@ -3088,7 +3293,7 @@ fn mouse_to_text_position(
     char_width: f32,
     line_height: f32,
     line_count: usize,
-    get_line_length: impl Fn(u32) -> u32,
+    get_line_text: impl Fn(u32) -> Option<String>,
 ) -> Option<TextPosition> {
     let local_x = window_x - editor_origin_x;
     let text_x = local_x - gutter_width;
@@ -3098,12 +3303,8 @@ fn mouse_to_text_position(
 
     let max_line = line_count.saturating_sub(1) as u32;
     let line = (((window_y - editor_origin_y) / line_height) as u32).min(max_line);
-    let character = if text_x > 0.0 {
-        (text_x / char_width) as u32
-    } else {
-        0
-    };
-    let character = character.min(get_line_length(line));
+    let line_text = get_line_text(line).unwrap_or_default();
+    let character = character_for_line_x(&line_text, text_x, char_width);
     Some(TextPosition::new(line, character))
 }
 
@@ -3157,12 +3358,12 @@ mod scroll_tests {
 mod mouse_tests {
     use super::*;
 
-    fn test_line_lengths(line: u32) -> u32 {
+    fn test_line_text(line: u32) -> Option<String> {
         match line {
-            0 => 8,  // "line one"
-            1 => 8,  // "line two"
-            2 => 10, // "line three"
-            _ => 0,
+            0 => Some("line one".to_string()),
+            1 => Some("line two".to_string()),
+            2 => Some("line three".to_string()),
+            _ => None,
         }
     }
 
@@ -3178,7 +3379,7 @@ mod mouse_tests {
             7.5,   // char width
             22.0,  // line height
             3,     // line_count
-            test_line_lengths,
+            test_line_text,
         )
         .unwrap();
         assert_eq!(pos.line, 0);
@@ -3197,7 +3398,7 @@ mod mouse_tests {
                 7.5,
                 22.0,
                 3,
-                test_line_lengths
+                test_line_text
             )
             .is_none()
         );
@@ -3214,7 +3415,7 @@ mod mouse_tests {
             7.5,
             22.0,
             3,
-            test_line_lengths,
+            test_line_text,
         );
         // text_x < 0 should return None (click on gutter, don't move)
         assert!(pos.is_none());
@@ -3231,7 +3432,7 @@ mod mouse_tests {
             7.5,
             22.0,
             3,
-            test_line_lengths,
+            test_line_text,
         )
         .unwrap();
         assert_eq!(pos.line, 0);
@@ -3250,7 +3451,7 @@ mod mouse_tests {
             7.5,
             22.0,
             3,
-            test_line_lengths,
+            test_line_text,
         )
         .unwrap();
         assert_eq!(pos.line, 2); // last line (line_count=3, indices 0-2)
@@ -3267,7 +3468,7 @@ mod mouse_tests {
             7.5,
             22.0,
             3,
-            test_line_lengths,
+            test_line_text,
         )
         .unwrap();
         assert_eq!(pos.line, 1);
@@ -3286,16 +3487,96 @@ mod mouse_tests {
             7.5,
             22.0,
             3,
-            test_line_lengths,
+            test_line_text,
         )
         .unwrap();
 
         assert_eq!(pos, TextPosition::new(0, 0));
     }
+
+    #[test]
+    fn cjk_click_inside_ascii_after_wide_character_maps_to_visible_column() {
+        let pos = mouse_to_text_position(
+            125.0,
+            64.0 + 7.5 + 15.0 + 1.0, // one ASCII, one CJK-width char, then inside "b"
+            120.0,
+            0.0,
+            64.0,
+            7.5,
+            22.0,
+            1,
+            |_| Some("a中b".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(pos, TextPosition::new(0, 2));
+    }
+
+    #[test]
+    fn grapheme_click_after_combining_mark_returns_cluster_boundary() {
+        let pos = mouse_to_text_position(
+            125.0,
+            64.0 + 7.5 + 1.0, // after "e\u{0301}", inside "x"
+            120.0,
+            0.0,
+            64.0,
+            7.5,
+            22.0,
+            1,
+            |_| Some("e\u{0301}x".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(pos, TextPosition::new(0, 2));
+    }
+
+    #[test]
+    fn grapheme_line_x_snaps_combining_mark_position_to_cluster_start() {
+        assert_eq!(line_x_for_character("e\u{0301}x", 1, 7.5), 0.0);
+    }
+
+    #[test]
+    fn grapheme_render_boundaries_do_not_split_combining_mark() {
+        assert_eq!(
+            normalized_text_boundaries("e\u{0301}x", vec![0, 1, 2, 3]),
+            vec![0, 2, 3]
+        );
+    }
+
+    #[test]
+    fn cjk_grapheme_japanese_voicing_mark_is_zero_width() {
+        assert_eq!(line_x_for_character("か\u{3099}x", 1, 7.5), 0.0);
+        assert_eq!(character_for_line_x("か\u{3099}x", 15.1, 7.5), 2);
+        assert_eq!(
+            normalized_text_boundaries("か\u{3099}x", vec![0, 1, 2, 3]),
+            vec![0, 2, 3]
+        );
+    }
+
+    #[test]
+    fn search_highlights_do_not_override_selection_after_grapheme_normalization() {
+        let highlights = normalize_text_highlight_ranges(
+            "e\u{0301}",
+            text_highlights_for_line(
+                Some((1, 2)),
+                vec![GpuiSearchHighlight {
+                    start: 0,
+                    end: 1,
+                    active: false,
+                }],
+            ),
+        );
+
+        assert_eq!(
+            text_highlight_for_range(&highlights, 0, 2),
+            Some(TextHighlightKind::Selection)
+        );
+    }
 }
 
 fn build_completion_popup(
     cursor: TextPosition,
+    line_text: &str,
     completion_items: &[GpuiEditorCompletion],
     selected_index: usize,
     prefix: &str,
@@ -3307,15 +3588,15 @@ fn build_completion_popup(
     (!visible_items.is_empty()).then(|| GpuiEditorCompletionPopup {
         anchor_line: cursor.line + 1,
         anchor_column: cursor.character + 1,
-        left_px: completion_popup_left(cursor),
+        left_px: completion_popup_left(cursor, line_text),
         top_px: completion_popup_top(cursor),
         selected_index,
         items: visible_items,
     })
 }
 
-fn completion_popup_left(cursor: TextPosition) -> f32 {
-    GUTTER_WIDTH_PX + cursor.character as f32 * CHAR_WIDTH_PX
+fn completion_popup_left(cursor: TextPosition, line_text: &str) -> f32 {
+    GUTTER_WIDTH_PX + line_x_for_character(line_text, cursor.character, CHAR_WIDTH_PX)
 }
 
 fn completion_popup_top(cursor: TextPosition) -> f32 {
