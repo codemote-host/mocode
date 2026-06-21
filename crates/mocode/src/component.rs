@@ -66,6 +66,7 @@ actions!(
         Undo,
         Redo,
         Find,
+        GoToLine,
         FindNext,
         FindPrevious,
         EscapeSearch,
@@ -147,6 +148,9 @@ pub(crate) struct GpuiEditorDocument {
     pub(crate) search_active: bool,
     pub(crate) search_query: String,
     pub(crate) search_summary: String,
+    pub(crate) go_to_line_active: bool,
+    pub(crate) go_to_line_query: String,
+    pub(crate) go_to_line_summary: String,
     ime_marked_range: Option<TextRange>,
 }
 
@@ -228,6 +232,9 @@ impl GpuiEditorDocument {
             search_active: false,
             search_query: String::new(),
             search_summary: "<none>".to_string(),
+            go_to_line_active: false,
+            go_to_line_query: String::new(),
+            go_to_line_summary: "<none>".to_string(),
             ime_marked_range: None,
         };
         document.refresh_derived();
@@ -894,6 +901,7 @@ impl GpuiEditorDocument {
 
     pub(crate) fn start_search_from_selection(&mut self) {
         self.search_active = true;
+        self.go_to_line_active = false;
         if let Some(selected) = self.selected_text()
             && !selected.is_empty()
         {
@@ -930,6 +938,54 @@ impl GpuiEditorDocument {
         if self.search_query.is_empty() {
             self.search_summary = "<none>".to_string();
         }
+    }
+
+    pub(crate) fn start_go_to_line(&mut self) {
+        self.search_active = false;
+        self.go_to_line_active = true;
+        self.go_to_line_query.clear();
+        self.go_to_line_summary = self.go_to_line_prompt();
+        self.completion_popup = None;
+    }
+
+    pub(crate) fn append_go_to_line_input(&mut self, text: &str) {
+        self.go_to_line_active = true;
+        self.go_to_line_query
+            .extend(text.chars().filter(char::is_ascii_digit));
+        self.update_go_to_line_summary();
+    }
+
+    pub(crate) fn go_to_line_backspace(&mut self) {
+        self.go_to_line_active = true;
+        self.go_to_line_query.pop();
+        self.update_go_to_line_summary();
+    }
+
+    pub(crate) fn close_go_to_line(&mut self) {
+        self.go_to_line_active = false;
+        if self.go_to_line_query.is_empty() {
+            self.go_to_line_summary = "<none>".to_string();
+        }
+    }
+
+    pub(crate) fn submit_go_to_line(&mut self) -> bool {
+        let Some(line_number) = parse_go_to_line_query(&self.go_to_line_query) else {
+            self.update_go_to_line_summary();
+            return false;
+        };
+        if self.line_count == 0 {
+            self.go_to_line_summary = "No lines".to_string();
+            return false;
+        }
+
+        let last_line = self.line_count.saturating_sub(1).min(u32::MAX as usize);
+        let target_line = line_number.saturating_sub(1).min(last_line);
+        self.cursor = TextPosition::new(target_line as u32, 0);
+        self.clear_selection();
+        self.go_to_line_active = false;
+        self.go_to_line_summary = format!("Line {}", target_line + 1);
+        self.refresh_derived();
+        true
     }
 
     pub(crate) fn find_next(&mut self) -> bool {
@@ -1031,6 +1087,18 @@ impl GpuiEditorDocument {
         } else {
             format!("{} - 0/0", self.search_query)
         };
+    }
+
+    fn update_go_to_line_summary(&mut self) {
+        self.go_to_line_summary = if self.go_to_line_query.is_empty() {
+            self.go_to_line_prompt()
+        } else {
+            format!("Go to line {}", self.go_to_line_query)
+        };
+    }
+
+    fn go_to_line_prompt(&self) -> String {
+        format!("Go to line 1-{}", self.line_count.max(1))
     }
 
     fn mark_dirty(&mut self) {
@@ -1550,16 +1618,40 @@ impl GpuiEditorComponent {
         self.document.start_search_from_selection();
     }
 
+    fn start_go_to_line(&mut self) {
+        self.document.start_go_to_line();
+    }
+
     fn search_backspace(&mut self) {
         self.document.search_backspace();
+    }
+
+    fn go_to_line_backspace(&mut self) {
+        self.document.go_to_line_backspace();
     }
 
     fn close_search(&mut self) {
         self.document.close_search();
     }
 
+    fn close_go_to_line(&mut self) {
+        self.document.close_go_to_line();
+    }
+
     fn search_active(&self) -> bool {
         self.document.search_active
+    }
+
+    fn go_to_line_active(&self) -> bool {
+        self.document.go_to_line_active
+    }
+
+    fn submit_go_to_line(&mut self) -> bool {
+        let jumped = self.document.submit_go_to_line();
+        if jumped {
+            self.reveal_cursor();
+        }
+        jumped
     }
 
     fn find_next(&mut self) -> bool {
@@ -1634,8 +1726,9 @@ pub(crate) fn bind_editor_keys(cx: &mut App) {
         KeyBinding::new("ctrl-y", Redo, Some("MocodeEditor")),
         KeyBinding::new("cmd-f", Find, Some("MocodeEditor")),
         KeyBinding::new("ctrl-f", Find, Some("MocodeEditor")),
+        KeyBinding::new("ctrl-g", GoToLine, Some("MocodeEditor")),
         KeyBinding::new("cmd-g", FindNext, Some("MocodeEditor")),
-        KeyBinding::new("ctrl-g", FindNext, Some("MocodeEditor")),
+        KeyBinding::new("f3", FindNext, Some("MocodeEditor")),
         KeyBinding::new("enter", Enter, Some("MocodeEditor")),
         KeyBinding::new("shift-enter", FindPrevious, Some("MocodeEditor")),
         KeyBinding::new("cmd-shift-g", FindPrevious, Some("MocodeEditor")),
@@ -1690,7 +1783,10 @@ where
         .key_context("MocodeEditor")
         .on_action(
             cx.listener(|this: &mut T, _: &Backspace, _: &mut Window, cx| {
-                if this.editor_component().search_active() {
+                if this.editor_component().go_to_line_active() {
+                    this.editor_component_mut().go_to_line_backspace();
+                    cx.notify();
+                } else if this.editor_component().search_active() {
                     this.editor_component_mut().search_backspace();
                     cx.notify();
                 } else if this.editor_component_mut().backspace().is_ok() {
@@ -1699,7 +1795,9 @@ where
             }),
         )
         .on_action(cx.listener(|this: &mut T, _: &Delete, _: &mut Window, cx| {
-            if this.editor_component_mut().delete().is_ok() {
+            if this.editor_component().go_to_line_active()
+                || this.editor_component_mut().delete().is_ok()
+            {
                 cx.notify();
             }
         }))
@@ -1792,6 +1890,12 @@ where
             cx.notify();
         }))
         .on_action(
+            cx.listener(|this: &mut T, _: &GoToLine, _: &mut Window, cx| {
+                this.editor_component_mut().start_go_to_line();
+                cx.notify();
+            }),
+        )
+        .on_action(
             cx.listener(|this: &mut T, _: &FindNext, _: &mut Window, cx| {
                 this.editor_component_mut().find_next();
                 cx.notify();
@@ -1807,6 +1911,9 @@ where
             cx.listener(|this: &mut T, _: &EscapeSearch, _: &mut Window, cx| {
                 if this.editor_component_mut().close_completion_popup() {
                     cx.notify();
+                } else if this.editor_component().go_to_line_active() {
+                    this.editor_component_mut().close_go_to_line();
+                    cx.notify();
                 } else {
                     this.editor_component_mut().close_search();
                     cx.notify();
@@ -1814,7 +1921,10 @@ where
             }),
         )
         .on_action(cx.listener(|this: &mut T, _: &Enter, _: &mut Window, cx| {
-            if this.editor_component().search_active() {
+            if this.editor_component().go_to_line_active() {
+                this.editor_component_mut().submit_go_to_line();
+                cx.notify();
+            } else if this.editor_component().search_active() {
                 this.editor_component_mut().find_next();
                 cx.notify();
             } else if this
@@ -2034,6 +2144,7 @@ fn status_bar(document: &GpuiEditorDocument) -> impl IntoElement {
     let selection = (document.selection_summary != "<none>")
         .then(|| format!("Sel {}", document.selection_summary));
     let find = find_bar_label(document);
+    let go_to_line = go_to_line_bar_label(document);
 
     div()
         .flex()
@@ -2055,6 +2166,9 @@ fn status_bar(document: &GpuiEditorDocument) -> impl IntoElement {
         .child(status_item(diagnostics_summary(document)))
         .child(status_item(completion_summary(document)))
         .when_some(find, |this, find| this.child(find_bar(find)))
+        .when_some(go_to_line, |this, go_to_line| {
+            this.child(find_bar(go_to_line))
+        })
         .child(status_item(chain_preview_summary(document)))
 }
 
@@ -2261,6 +2375,12 @@ pub(crate) fn find_bar_label(document: &GpuiEditorDocument) -> Option<String> {
     document
         .search_active
         .then(|| format!("Find: {}", document.search_summary))
+}
+
+pub(crate) fn go_to_line_bar_label(document: &GpuiEditorDocument) -> Option<String> {
+    document
+        .go_to_line_active
+        .then(|| document.go_to_line_summary.clone())
 }
 
 fn find_bar(text: String) -> impl IntoElement {
@@ -3123,6 +3243,10 @@ fn match_start_indices(text: &str, query: &str) -> Vec<usize> {
     text.match_indices(query)
         .map(|(byte_index, _)| byte_index)
         .collect()
+}
+
+fn parse_go_to_line_query(query: &str) -> Option<usize> {
+    query.parse::<usize>().ok().filter(|line| *line > 0)
 }
 
 fn build_search_match(

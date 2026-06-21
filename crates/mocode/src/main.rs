@@ -18,7 +18,10 @@ mod tests {
 
     use crate::{
         app,
-        component::{GpuiEditorDocument, GpuiEditorSaveError, GpuiSearchHighlight, find_bar_label},
+        component::{
+            GpuiEditorDocument, GpuiEditorSaveError, GpuiSearchHighlight, find_bar_label,
+            go_to_line_bar_label,
+        },
         fixtures::{SAMPLE_TITLE, default_fixture, document_by_fixture_id, document_from_fixture},
     };
 
@@ -1440,6 +1443,104 @@ mod tests {
 
         assert!(document.selected_text().is_none());
         assert_eq!(document.selection_summary, "<none>");
+    }
+
+    #[test]
+    fn daily_go_to_line_jumps_to_requested_line() {
+        let mut document = GpuiEditorDocument::from_text(
+            "jump.yaml",
+            "mixed-port: 7890\nmode: rule\nlog-level: info",
+            TextPosition::new(0, 0),
+        );
+
+        document.start_go_to_line();
+        document.append_go_to_line_input("3");
+
+        assert!(document.submit_go_to_line());
+        assert_eq!(document.cursor, TextPosition::new(2, 0));
+        assert!(!document.go_to_line_active);
+        assert_eq!(document.go_to_line_summary, "Line 3");
+        assert!(document.selected_text().is_none());
+    }
+
+    #[test]
+    fn daily_go_to_line_clamps_to_last_line() {
+        let mut document = GpuiEditorDocument::from_text(
+            "jump.yaml",
+            "mixed-port: 7890\nmode: rule\nlog-level: info",
+            TextPosition::new(0, 0),
+        );
+
+        document.start_go_to_line();
+        document.append_go_to_line_input("99");
+
+        assert!(document.submit_go_to_line());
+        assert_eq!(document.cursor, TextPosition::new(2, 0));
+        assert_eq!(document.go_to_line_summary, "Line 3");
+    }
+
+    #[test]
+    fn daily_go_to_line_filters_digits_and_supports_backspace() {
+        let mut document = GpuiEditorDocument::from_text(
+            "jump.yaml",
+            "mixed-port: 7890\nmode: rule\nlog-level: info",
+            TextPosition::new(0, 0),
+        );
+
+        document.start_go_to_line();
+        document.append_go_to_line_input("1a2");
+        document.go_to_line_backspace();
+
+        assert_eq!(document.go_to_line_query, "1");
+        assert_eq!(document.go_to_line_summary, "Go to line 1");
+    }
+
+    #[test]
+    fn go_to_line_bar_tracks_active_query() {
+        let mut document = GpuiEditorDocument::from_text(
+            "jump.yaml",
+            "mixed-port: 7890\nmode: rule\nlog-level: info",
+            TextPosition::new(0, 0),
+        );
+
+        assert_eq!(go_to_line_bar_label(&document), None);
+
+        document.start_go_to_line();
+        assert_eq!(
+            go_to_line_bar_label(&document),
+            Some("Go to line 1-3".to_string())
+        );
+
+        document.append_go_to_line_input("2");
+        assert_eq!(
+            go_to_line_bar_label(&document),
+            Some("Go to line 2".to_string())
+        );
+
+        document.close_go_to_line();
+        assert_eq!(go_to_line_bar_label(&document), None);
+    }
+
+    #[test]
+    fn go_to_line_action_is_bound_to_ctrl_g_and_enter_escape() {
+        let component_source = include_str!("component.rs");
+
+        assert!(component_source.contains("GoToLine"));
+        assert!(component_source.contains("KeyBinding::new(\"ctrl-g\", GoToLine"));
+        assert!(component_source.contains("start_go_to_line()"));
+        assert!(component_source.contains("submit_go_to_line()"));
+        assert!(component_source.contains("close_go_to_line()"));
+    }
+
+    #[test]
+    fn text_input_routes_to_go_to_line_before_search_or_buffer() {
+        let app_source = include_str!("app.rs");
+        let go_to_line_index = app_source.find("go_to_line_active").unwrap();
+        let search_index = app_source.find("search_active").unwrap();
+        let replace_index = app_source.find("replace_utf16_range").unwrap();
+
+        assert!(go_to_line_index < search_index);
+        assert!(go_to_line_index < replace_index);
     }
 
     #[test]
