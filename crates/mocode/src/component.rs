@@ -93,6 +93,7 @@ pub(crate) struct GpuiEditorDiagnostic {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GpuiEditorCompletion {
     pub(crate) label: String,
+    pub(crate) insert_text: String,
     pub(crate) kind: String,
     pub(crate) documentation: Option<String>,
 }
@@ -222,6 +223,28 @@ impl GpuiEditorDocument {
     pub(crate) fn insert_pasted_text(&mut self, text: &str) -> Result<(), EditorError> {
         let normalized = normalize_pasted_yaml_indentation(text, &self.current_line_prefix());
         self.replace_utf16_range(None, &normalized)
+    }
+
+    pub(crate) fn accept_completion(&mut self) -> Result<bool, EditorError> {
+        let Some((prefix, replace_range)) = self.completion_prefix_range() else {
+            return Ok(false);
+        };
+        if prefix.is_empty() && !can_accept_empty_completion(&self.current_line_prefix()) {
+            return Ok(false);
+        }
+
+        let Some(insert_text) = completion_insert_text(&self.completion_items, &prefix) else {
+            return Ok(false);
+        };
+
+        self.editor
+            .apply_edit(TextEdit::replace(replace_range, &insert_text))?;
+        self.cursor = position_after_insert(replace_range.start, &insert_text);
+        self.ime_marked_range = None;
+        self.clear_selection();
+        self.mark_dirty();
+        self.refresh_derived();
+        Ok(true)
     }
 
     pub(crate) fn commit_text(&mut self, text: &str) -> Result<(), EditorError> {
@@ -932,6 +955,7 @@ impl GpuiEditorDocument {
             .into_iter()
             .map(|completion| GpuiEditorCompletion {
                 label: completion.label,
+                insert_text: completion.insert_text,
                 kind: completion_kind_label(completion.kind).to_string(),
                 documentation: completion.documentation,
             })
@@ -986,6 +1010,26 @@ impl GpuiEditorDocument {
             .chars()
             .take(self.cursor.character as usize)
             .collect()
+    }
+
+    fn completion_prefix_range(&self) -> Option<(String, TextRange)> {
+        let line_text = self.editor.line_text(self.cursor.line as usize)?;
+        let line_len = line_text.chars().count() as u32;
+        let cursor_character = self.cursor.character.min(line_len);
+        let prefix_start = completion_prefix_start(&line_text, cursor_character);
+        let prefix = line_text
+            .chars()
+            .skip(prefix_start as usize)
+            .take((cursor_character - prefix_start) as usize)
+            .collect();
+
+        Some((
+            prefix,
+            TextRange::new(
+                TextPosition::new(self.cursor.line, prefix_start),
+                TextPosition::new(self.cursor.line, cursor_character),
+            ),
+        ))
     }
 
     fn comment_line_range(&self) -> Option<(u32, u32)> {
@@ -1128,6 +1172,14 @@ impl GpuiEditorComponent {
     fn insert_pasted_text(&mut self, text: &str) -> Result<(), EditorError> {
         let result = self.document.insert_pasted_text(text);
         self.reveal_if_ok(result)
+    }
+
+    fn accept_completion(&mut self) -> Result<bool, EditorError> {
+        let accepted = self.document.accept_completion()?;
+        if accepted {
+            self.reveal_cursor();
+        }
+        Ok(accepted)
     }
 
     fn insert_tab(&mut self) -> Result<(), EditorError> {
@@ -1429,7 +1481,13 @@ where
             }
         }))
         .on_action(cx.listener(|this: &mut T, _: &Tab, _: &mut Window, cx| {
-            if this.editor_component_mut().insert_tab().is_ok() {
+            if this
+                .editor_component_mut()
+                .accept_completion()
+                .is_ok_and(|accepted| accepted)
+            {
+                cx.notify();
+            } else if this.editor_component_mut().insert_tab().is_ok() {
                 cx.notify();
             }
         }))
@@ -1531,6 +1589,12 @@ where
         .on_action(cx.listener(|this: &mut T, _: &Enter, _: &mut Window, cx| {
             if this.editor_component().search_active() {
                 this.editor_component_mut().find_next();
+                cx.notify();
+            } else if this
+                .editor_component_mut()
+                .accept_completion()
+                .is_ok_and(|accepted| accepted)
+            {
                 cx.notify();
             } else if this.editor_component_mut().insert_newline().is_ok() {
                 cx.notify();
@@ -2155,6 +2219,50 @@ fn cursor_after_comment_toggle(
     } else {
         TextPosition::new(cursor.line, cursor.character + 2)
     }
+}
+
+fn completion_insert_text(
+    completion_items: &[GpuiEditorCompletion],
+    prefix: &str,
+) -> Option<String> {
+    if prefix.is_empty() {
+        return completion_items
+            .first()
+            .map(|completion| completion.insert_text.clone());
+    }
+
+    completion_items
+        .iter()
+        .find(|completion| {
+            starts_with_ignore_ascii_case(&completion.insert_text, prefix)
+                || starts_with_ignore_ascii_case(&completion.label, prefix)
+        })
+        .map(|completion| completion.insert_text.clone())
+}
+
+fn completion_prefix_start(line_text: &str, cursor_character: u32) -> u32 {
+    let chars = line_text.chars().collect::<Vec<_>>();
+    let mut index = (cursor_character as usize).min(chars.len());
+
+    while index > 0 && is_completion_prefix_char(chars[index - 1]) {
+        index -= 1;
+    }
+
+    index as u32
+}
+
+fn is_completion_prefix_char(ch: char) -> bool {
+    !ch.is_whitespace() && !matches!(ch, ':' | ',' | '[' | ']' | '{' | '}' | '"' | '\'' | '#')
+}
+
+fn can_accept_empty_completion(line_prefix: &str) -> bool {
+    let trimmed = line_prefix.trim_end();
+    !line_prefix.trim().is_empty() && (trimmed.ends_with(':') || trimmed.ends_with('-'))
+}
+
+fn starts_with_ignore_ascii_case(text: &str, prefix: &str) -> bool {
+    text.get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
 }
 
 fn normalize_pasted_yaml_indentation(text: &str, line_prefix: &str) -> String {

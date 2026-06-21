@@ -297,6 +297,7 @@ mod tests {
 
         assert!(document.completion_items.iter().any(|item| {
             item.label == "fake-ip"
+                && item.insert_text == "fake-ip"
                 && item.kind == "enum"
                 && item
                     .documentation
@@ -316,12 +317,9 @@ mod tests {
         let popup = document.completion_popup.as_ref().unwrap();
         assert_eq!(popup.anchor_line, 4);
         assert_eq!(popup.anchor_column, 19);
-        assert!(
-            popup
-                .items
-                .iter()
-                .any(|item| item.label == "exit" && item.kind == "reference")
-        );
+        assert!(popup.items.iter().any(|item| item.label == "exit"
+            && item.insert_text == "exit"
+            && item.kind == "reference"));
     }
 
     #[test]
@@ -399,6 +397,59 @@ mod tests {
 
         assert_eq!(document.line_at(1).unwrap().text, "  mode: fake-ip");
         assert_eq!(document.cursor, TextPosition::new(1, 2));
+    }
+
+    #[test]
+    fn daily_accept_completion_replaces_typed_field_prefix() {
+        let mut document =
+            GpuiEditorDocument::from_text("scratch.yaml", "mi\n", TextPosition::new(0, 2));
+
+        assert!(
+            document
+                .completion_labels
+                .contains(&"mixed-port".to_string())
+        );
+        assert!(document.accept_completion().unwrap());
+
+        assert_eq!(document.line_at(0).unwrap().text, "mixed-port: ");
+        assert_eq!(document.cursor, TextPosition::new(0, 12));
+    }
+
+    #[test]
+    fn daily_accept_completion_replaces_typed_enum_prefix() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enhanced-mode: fa\n",
+            TextPosition::new(1, 19),
+        );
+
+        assert!(document.completion_labels.contains(&"fake-ip".to_string()));
+        assert!(document.accept_completion().unwrap());
+
+        assert_eq!(
+            document.line_at(1).unwrap().text,
+            "  enhanced-mode: fake-ip"
+        );
+        assert_eq!(document.cursor, TextPosition::new(1, 24));
+    }
+
+    #[test]
+    fn daily_accept_completion_ignores_plain_blank_indent() {
+        let mut document =
+            GpuiEditorDocument::from_text("scratch.yaml", "dns:\n  \n", TextPosition::new(1, 2));
+
+        assert!(!document.accept_completion().unwrap());
+        assert_eq!(document.line_at(1).unwrap().text, "  ");
+        assert_eq!(document.cursor, TextPosition::new(1, 2));
+    }
+
+    #[test]
+    fn completion_acceptance_is_wired_before_tab_and_enter_fallbacks() {
+        let component_source = include_str!("component.rs");
+
+        assert!(component_source.contains("accept_completion"));
+        assert!(component_source.contains("else if this.editor_component_mut().insert_tab()"));
+        assert!(component_source.contains("else if this.editor_component_mut().insert_newline()"));
     }
 
     #[test]
