@@ -1,7 +1,8 @@
 use mocode_mihomo_lint::{DiagnosticSeverity, SemanticIndex, validate_index};
 use mocode_mihomo_schema::{BUILTIN_OUTBOUNDS, CompletionKind, SchemaCatalog};
 use mocode_text::{TextBuffer, TextEdit, TextEditError, TextPosition, TextRange};
-use mocode_yaml::{YamlDocument, YamlPath, YamlPathSegment};
+pub use mocode_yaml::SyntaxHighlightKind;
+use mocode_yaml::{SyntaxToken, YamlDocument, YamlPath, YamlPathSegment};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +53,14 @@ pub struct SemanticLine {
     pub number: u32,
     pub text: String,
     pub diagnostics: Vec<LineDiagnostic>,
+    pub highlights: Vec<SyntaxHighlightSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyntaxHighlightSpan {
+    pub start: u32,
+    pub end: u32,
+    pub kind: SyntaxHighlightKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -360,6 +369,7 @@ impl MocodeEditor {
                     diagnostics: diagnostics_by_line
                         .remove(&u32::try_from(line).ok()?)
                         .unwrap_or_default(),
+                    highlights: Vec::new(),
                 })
             })
             .collect()
@@ -388,6 +398,7 @@ impl MocodeEditor {
                     column: Some(range.start.character),
                 });
         }
+        let mut highlights_by_line = self.syntax_highlights_by_line(start_line, end);
 
         (start_line..end)
             .filter_map(|line| {
@@ -396,6 +407,9 @@ impl MocodeEditor {
                     number,
                     text: self.line_text(line)?,
                     diagnostics: diagnostics_by_line
+                        .remove(&u32::try_from(line).ok()?)
+                        .unwrap_or_default(),
+                    highlights: highlights_by_line
                         .remove(&u32::try_from(line).ok()?)
                         .unwrap_or_default(),
                 })
@@ -521,6 +535,40 @@ impl MocodeEditor {
         let text = self.text.as_string();
         self.yaml = YamlDocument::parse(&text);
         self.semantic_index = SemanticIndex::from_yaml_str(&text);
+    }
+
+    fn syntax_highlights_by_line(
+        &self,
+        start_line: usize,
+        end_line: usize,
+    ) -> BTreeMap<u32, Vec<SyntaxHighlightSpan>> {
+        let mut highlights_by_line = BTreeMap::<u32, Vec<SyntaxHighlightSpan>>::new();
+        for token in self.yaml.syntax_tokens_in_line_range(start_line, end_line) {
+            if let Some((line, highlight)) = self.line_highlight_span(token) {
+                highlights_by_line.entry(line).or_default().push(highlight);
+            }
+        }
+        highlights_by_line
+    }
+
+    fn line_highlight_span(&self, token: SyntaxToken) -> Option<(u32, SyntaxHighlightSpan)> {
+        let line = token.range.start.line;
+        let text = self.line_text(line as usize)?;
+        let line_length = text.chars().count() as u32;
+        let start = token.range.start.character.min(line_length);
+        let end = if token.range.end.line == line {
+            token.range.end.character.min(line_length)
+        } else {
+            line_length
+        };
+        (start < end).then_some((
+            line,
+            SyntaxHighlightSpan {
+                start,
+                end,
+                kind: token.kind,
+            },
+        ))
     }
 }
 
@@ -1124,5 +1172,151 @@ mod tests {
             slice.iter().any(|line| !line.diagnostics.is_empty()),
             "slice should include at least one line with diagnostics"
         );
+    }
+
+    #[test]
+    fn semantic_lines_in_range_carries_syntax_highlight_spans_for_visible_lines_only() {
+        let editor = MocodeEditor::open_text("# hidden\nmixed-port: 7890\nallow-lan: true\n");
+
+        let slice = editor.semantic_lines_in_range(1, 3);
+
+        assert_eq!(slice.len(), 2);
+        assert!(
+            slice
+                .iter()
+                .flat_map(|line| &line.highlights)
+                .all(|highlight| highlight.start < highlight.end)
+        );
+        assert!(
+            slice[0].highlights.iter().any(|highlight| {
+                highlight.start == 0
+                    && highlight.end == 10
+                    && highlight.kind == SyntaxHighlightKind::Key
+            }),
+            "expected key highlight on visible line: {:#?}",
+            slice[0].highlights
+        );
+        assert!(
+            slice[0].highlights.iter().any(|highlight| {
+                highlight.start == 12
+                    && highlight.end == 16
+                    && highlight.kind == SyntaxHighlightKind::Number
+            }),
+            "expected number highlight on visible line: {:#?}",
+            slice[0].highlights
+        );
+        assert!(
+            slice[1].highlights.iter().any(|highlight| {
+                highlight.start == 11
+                    && highlight.end == 15
+                    && highlight.kind == SyntaxHighlightKind::Boolean
+            }),
+            "expected boolean highlight on visible line: {:#?}",
+            slice[1].highlights
+        );
+        assert!(
+            slice
+                .iter()
+                .flat_map(|line| &line.highlights)
+                .all(|highlight| highlight.kind != SyntaxHighlightKind::Comment),
+            "line 0 comment must not be included in requested visible slice"
+        );
+    }
+
+    #[test]
+    fn semantic_lines_in_range_highlights_block_scalar_when_viewport_starts_inside_token() {
+        let editor = MocodeEditor::open_text("payload: |\n  alpha\n  beta\n  gamma\nnext: true\n");
+
+        let slice = editor.semantic_lines_in_range(2, 4);
+
+        assert_eq!(slice.len(), 2);
+        assert!(slice[0].highlights.iter().any(|highlight| {
+            highlight.start == 0
+                && highlight.end == 6
+                && highlight.kind == SyntaxHighlightKind::String
+        }));
+        assert!(slice[1].highlights.iter().any(|highlight| {
+            highlight.start == 0
+                && highlight.end == 7
+                && highlight.kind == SyntaxHighlightKind::String
+        }));
+    }
+
+    #[test]
+    fn semantic_lines_keeps_highlights_empty_for_non_viewport_snapshot_path() {
+        let editor = MocodeEditor::open_text("mixed-port: 7890\nbad: [\n");
+
+        let lines = editor.semantic_lines();
+
+        assert!(lines.iter().all(|line| line.highlights.is_empty()));
+        assert!(
+            lines.iter().any(|line| !line.diagnostics.is_empty()),
+            "diagnostic aggregation should remain available on full semantic_lines path"
+        );
+    }
+
+    #[test]
+    fn semantic_lines_in_range_highlights_small_slice_of_large_fixture() {
+        let text = include_str!("../../../examples/configs/large-20000.yaml");
+        let editor = MocodeEditor::open_text(text);
+
+        let slice = editor.semantic_lines_in_range(0, 3);
+
+        assert_eq!(slice.len(), 3);
+        assert!(slice.iter().any(|line| !line.highlights.is_empty()));
+        assert!(
+            slice
+                .iter()
+                .flat_map(|line| &line.highlights)
+                .all(|highlight| highlight.start < highlight.end)
+        );
+    }
+
+    #[test]
+    fn semantic_lines_in_range_handles_bottom_slice_of_large_fixture() {
+        let text = include_str!("../../../examples/configs/large-20000.yaml");
+        let editor = MocodeEditor::open_text(text);
+
+        let slice = editor.semantic_lines_in_range(19_990, 20_000);
+
+        assert_eq!(slice.len(), 10);
+        assert_eq!(slice[0].number, 19_991);
+        assert!(
+            slice
+                .iter()
+                .flat_map(|line| &line.highlights)
+                .any(|highlight| highlight.kind == SyntaxHighlightKind::Comment)
+        );
+        assert!(
+            slice
+                .iter()
+                .flat_map(|line| &line.highlights)
+                .all(|highlight| highlight.start < highlight.end)
+        );
+    }
+
+    #[test]
+    fn semantic_lines_in_range_highlights_constructed_twenty_thousand_line_tail() {
+        let mut text = String::new();
+        for _ in 0..19_990 {
+            text.push('\n');
+        }
+        text.push_str("tail-number: 9000\n");
+        text.push_str("tail-bool: true\n");
+        text.push_str("tail-string: done\n");
+
+        let editor = MocodeEditor::open_text(text);
+        let slice = editor.semantic_lines_in_range(19_990, 20_000);
+
+        assert_eq!(slice[0].number, 19_991);
+        assert!(slice[0].highlights.iter().any(|highlight| {
+            highlight.kind == SyntaxHighlightKind::Number && highlight.start == 13
+        }));
+        assert!(slice[1].highlights.iter().any(|highlight| {
+            highlight.kind == SyntaxHighlightKind::Boolean && highlight.start == 11
+        }));
+        assert!(slice[2].highlights.iter().any(|highlight| {
+            highlight.kind == SyntaxHighlightKind::String && highlight.start == 13
+        }));
     }
 }

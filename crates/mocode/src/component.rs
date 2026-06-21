@@ -9,7 +9,7 @@ use std::{
 
 use mocode_api::{
     CompletionKind, DiagnosticSeverity, EditorError, MocodeEditor, ProxyChainPreview,
-    ProxyChainStatus, TextEdit, TextPosition, TextRange,
+    ProxyChainStatus, SyntaxHighlightKind, TextEdit, TextPosition, TextRange,
 };
 
 use gpui::{
@@ -82,6 +82,14 @@ pub(crate) struct GpuiEditorLine {
     pub(crate) diagnostic_count: usize,
     pub(crate) diagnostic_severity: Option<String>,
     pub(crate) diagnostic_message: Option<String>,
+    pub(crate) syntax_highlights: Vec<GpuiSyntaxHighlight>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GpuiSyntaxHighlight {
+    pub(crate) start: u32,
+    pub(crate) end: u32,
+    pub(crate) kind: SyntaxHighlightKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -830,6 +838,15 @@ impl GpuiEditorDocument {
                 .diagnostics
                 .first()
                 .map(|diagnostic| diagnostic.message.clone()),
+            syntax_highlights: line
+                .highlights
+                .into_iter()
+                .map(|highlight| GpuiSyntaxHighlight {
+                    start: highlight.start,
+                    end: highlight.end,
+                    kind: highlight.kind,
+                })
+                .collect(),
         })
     }
 
@@ -849,6 +866,15 @@ impl GpuiEditorDocument {
                     .diagnostics
                     .first()
                     .map(|diagnostic| diagnostic.message.clone()),
+                syntax_highlights: line
+                    .highlights
+                    .into_iter()
+                    .map(|highlight| GpuiSyntaxHighlight {
+                        start: highlight.start,
+                        end: highlight.end,
+                        kind: highlight.kind,
+                    })
+                    .collect(),
             })
             .collect()
     }
@@ -2159,6 +2185,7 @@ where
                                 line.text,
                                 line.diagnostic_count,
                                 line.diagnostic_severity,
+                                line.syntax_highlights,
                                 diagnostic_hint,
                                 cursor,
                                 line_selection,
@@ -2515,6 +2542,7 @@ fn line_row(
     text: String,
     diagnostic_count: usize,
     diagnostic_severity: Option<String>,
+    syntax_highlights: Vec<GpuiSyntaxHighlight>,
     diagnostic_hint: Option<String>,
     cursor: Option<u32>,
     selection: Option<(u32, u32)>,
@@ -2547,7 +2575,13 @@ fn line_row(
                     format!("{number:>3}!")
                 })),
         )
-        .child(render_line_text(text, cursor, selection, search_highlights))
+        .child(render_line_text(
+            text,
+            cursor,
+            selection,
+            search_highlights,
+            syntax_highlights,
+        ))
         .when_some(diagnostic_hint, |this, hint| {
             this.child(line_diagnostic_hint(hint))
         })
@@ -2573,6 +2607,7 @@ fn render_line_text(
     cursor: Option<u32>,
     selection: Option<(u32, u32)>,
     search_highlights: Vec<GpuiSearchHighlight>,
+    syntax_highlights: Vec<GpuiSyntaxHighlight>,
 ) -> impl IntoElement {
     div()
         .px_3()
@@ -2585,6 +2620,7 @@ fn render_line_text(
             &text,
             cursor,
             text_highlights_for_line(selection, search_highlights),
+            syntax_highlights_for_line(syntax_highlights),
         ))
 }
 
@@ -2600,6 +2636,13 @@ struct TextHighlight {
     start: u32,
     end: u32,
     kind: TextHighlightKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TextSyntaxHighlight {
+    start: u32,
+    end: u32,
+    kind: SyntaxHighlightKind,
 }
 
 fn text_highlights_for_line(
@@ -2641,53 +2684,59 @@ fn text_highlights_for_line(
     highlights
 }
 
+fn syntax_highlights_for_line(
+    syntax_highlights: Vec<GpuiSyntaxHighlight>,
+) -> Vec<TextSyntaxHighlight> {
+    let mut highlights: Vec<TextSyntaxHighlight> = syntax_highlights
+        .into_iter()
+        .filter(|highlight| highlight.start < highlight.end)
+        .map(|highlight| TextSyntaxHighlight {
+            start: highlight.start,
+            end: highlight.end,
+            kind: highlight.kind,
+        })
+        .collect();
+
+    highlights.sort_by_key(|highlight| (highlight.start, highlight.end));
+    highlights
+}
+
 fn render_text_segments(
     text: &str,
     cursor: Option<u32>,
     highlights: Vec<TextHighlight>,
+    syntax_highlights: Vec<TextSyntaxHighlight>,
 ) -> Vec<AnyElement> {
     let line_length = text.chars().count() as u32;
     let mut children = Vec::new();
     let mut cursor_inserted = false;
-    let mut position = 0;
 
-    for highlight in highlights {
-        let highlight_start = highlight.start.min(line_length).max(position);
-        let highlight_end = highlight.end.min(line_length);
-        if highlight_start >= highlight_end {
-            continue;
-        }
-
-        push_text_segment(
-            &mut children,
-            text,
-            position,
-            highlight_start,
-            cursor,
-            &mut cursor_inserted,
-            None,
-        );
-        push_text_segment(
-            &mut children,
-            text,
-            highlight_start,
-            highlight_end,
-            cursor,
-            &mut cursor_inserted,
-            Some(highlight.kind),
-        );
-        position = highlight_end;
+    let mut boundaries = vec![0, line_length];
+    for highlight in &highlights {
+        boundaries.push(highlight.start.min(line_length));
+        boundaries.push(highlight.end.min(line_length));
     }
+    for highlight in &syntax_highlights {
+        boundaries.push(highlight.start.min(line_length));
+        boundaries.push(highlight.end.min(line_length));
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
 
-    push_text_segment(
-        &mut children,
-        text,
-        position,
-        line_length,
-        cursor,
-        &mut cursor_inserted,
-        None,
-    );
+    for window in boundaries.windows(2) {
+        let start = window[0];
+        let end = window[1];
+        push_text_segment(
+            &mut children,
+            text,
+            start,
+            end,
+            cursor,
+            &mut cursor_inserted,
+            text_highlight_for_range(&highlights, start, end),
+            syntax_highlight_for_range(&syntax_highlights, start, end),
+        );
+    }
 
     if !cursor_inserted
         && let Some(cursor) = cursor
@@ -2707,19 +2756,49 @@ fn push_text_segment(
     cursor: Option<u32>,
     cursor_inserted: &mut bool,
     highlight: Option<TextHighlightKind>,
+    syntax_highlight: Option<SyntaxHighlightKind>,
 ) {
     let cursor_in_segment =
         !*cursor_inserted && cursor.is_some_and(|cursor| cursor >= start && cursor <= end);
 
     if cursor_in_segment {
         let cursor = cursor.unwrap();
-        push_text_piece(children, text, start, cursor, highlight);
+        push_text_piece(children, text, start, cursor, highlight, syntax_highlight);
         push_cursor(children);
         *cursor_inserted = true;
-        push_text_piece(children, text, cursor, end, highlight);
+        push_text_piece(children, text, cursor, end, highlight, syntax_highlight);
     } else {
-        push_text_piece(children, text, start, end, highlight);
+        push_text_piece(children, text, start, end, highlight, syntax_highlight);
     }
+}
+
+fn text_highlight_for_range(
+    highlights: &[TextHighlight],
+    start: u32,
+    end: u32,
+) -> Option<TextHighlightKind> {
+    highlights
+        .iter()
+        .find(|highlight| highlight.start <= start && highlight.end >= end)
+        .map(|highlight| highlight.kind)
+}
+
+fn syntax_highlight_for_range(
+    highlights: &[TextSyntaxHighlight],
+    start: u32,
+    end: u32,
+) -> Option<SyntaxHighlightKind> {
+    let mut fallback = None;
+    for highlight in highlights
+        .iter()
+        .filter(|highlight| highlight.start <= start && highlight.end >= end)
+    {
+        fallback.get_or_insert(highlight.kind);
+        if highlight.kind == SyntaxHighlightKind::Error {
+            return Some(SyntaxHighlightKind::Error);
+        }
+    }
+    fallback
 }
 
 fn push_text_piece(
@@ -2728,6 +2807,7 @@ fn push_text_piece(
     start: u32,
     end: u32,
     highlight: Option<TextHighlightKind>,
+    syntax_highlight: Option<SyntaxHighlightKind>,
 ) {
     if start >= end {
         return;
@@ -2736,17 +2816,39 @@ fn push_text_piece(
     let start_byte = char_to_byte_index(text, start);
     let end_byte = char_to_byte_index(text, end);
     let piece = text[start_byte..end_byte].to_string();
-    let element = match highlight {
-        Some(TextHighlightKind::Search) => div().bg(rgb(0xfef3c7)).child(piece).into_any_element(),
-        Some(TextHighlightKind::ActiveSearch) => {
-            div().bg(rgb(0xfbbf24)).child(piece).into_any_element()
-        }
-        Some(TextHighlightKind::Selection) => {
-            div().bg(rgb(0xdbeafe)).child(piece).into_any_element()
-        }
-        None => div().child(piece).into_any_element(),
-    };
+    let mut element = div();
+    if let Some(color) = syntax_highlight.and_then(syntax_highlight_color) {
+        element = element.text_color(color);
+    }
+    if let Some(color) = text_highlight_color(highlight) {
+        element = element.bg(color);
+    }
+    let element = element.child(piece).into_any_element();
     children.push(element);
+}
+
+fn syntax_highlight_color(kind: SyntaxHighlightKind) -> Option<gpui::Hsla> {
+    match kind {
+        SyntaxHighlightKind::Comment => Some(rgb(0x64748b).into()),
+        SyntaxHighlightKind::Key => Some(rgb(0x1d4ed8).into()),
+        SyntaxHighlightKind::String => Some(rgb(0x047857).into()),
+        SyntaxHighlightKind::Number => Some(rgb(0xb45309).into()),
+        SyntaxHighlightKind::Boolean => Some(rgb(0x7c3aed).into()),
+        SyntaxHighlightKind::Null => Some(rgb(0xbe123c).into()),
+        SyntaxHighlightKind::Anchor | SyntaxHighlightKind::Alias => Some(rgb(0x0e7490).into()),
+        SyntaxHighlightKind::Tag => Some(rgb(0x9333ea).into()),
+        SyntaxHighlightKind::Error => Some(rgb(0xdc2626).into()),
+        SyntaxHighlightKind::Punctuation => None,
+    }
+}
+
+fn text_highlight_color(kind: Option<TextHighlightKind>) -> Option<gpui::Hsla> {
+    match kind {
+        Some(TextHighlightKind::Search) => Some(rgb(0xfef3c7).into()),
+        Some(TextHighlightKind::ActiveSearch) => Some(rgb(0xfbbf24).into()),
+        Some(TextHighlightKind::Selection) => Some(rgb(0xdbeafe).into()),
+        None => None,
+    }
 }
 
 fn push_cursor(children: &mut Vec<AnyElement>) {

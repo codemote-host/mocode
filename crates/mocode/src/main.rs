@@ -14,7 +14,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use mocode_api::{ProxyChainStatus, TextPosition};
+    use mocode_api::{ProxyChainStatus, SyntaxHighlightKind, TextPosition};
 
     use crate::{
         app,
@@ -1770,6 +1770,74 @@ mod tests {
         assert!(component_source.contains("line_search_highlights"));
         assert!(component_source.contains(".child(render_line_text("));
         assert!(component_source.contains("search_highlights: Vec<GpuiSearchHighlight>"));
+    }
+
+    #[test]
+    fn editor_document_exposes_syntax_highlights_from_visible_core_slice() {
+        let document = GpuiEditorDocument::from_text(
+            "syntax.yaml",
+            "# hidden\nmixed-port: 7890\n",
+            TextPosition::new(1, 0),
+        );
+
+        let line = document.line_at(1).unwrap();
+
+        assert!(line.syntax_highlights.iter().any(|highlight| {
+            highlight.start == 0
+                && highlight.end == 10
+                && highlight.kind == SyntaxHighlightKind::Key
+        }));
+        assert!(line.syntax_highlights.iter().any(|highlight| {
+            highlight.start == 12
+                && highlight.end == 16
+                && highlight.kind == SyntaxHighlightKind::Number
+        }));
+    }
+
+    #[test]
+    fn editor_lines_in_range_carries_distinct_syntax_highlight_kinds() {
+        let document = GpuiEditorDocument::from_text(
+            "syntax.yaml",
+            "# comment\nmixed-port: 7890\nallow-lan: true\n",
+            TextPosition::new(1, 0),
+        );
+
+        let lines = document.lines_in_range(0, 3);
+
+        assert!(
+            lines[0]
+                .syntax_highlights
+                .iter()
+                .any(|highlight| highlight.kind == SyntaxHighlightKind::Comment)
+        );
+        assert!(
+            lines[1]
+                .syntax_highlights
+                .iter()
+                .any(|highlight| highlight.kind == SyntaxHighlightKind::Key)
+        );
+        assert!(
+            lines[1]
+                .syntax_highlights
+                .iter()
+                .any(|highlight| highlight.kind == SyntaxHighlightKind::Number)
+        );
+        assert!(
+            lines[2]
+                .syntax_highlights
+                .iter()
+                .any(|highlight| highlight.kind == SyntaxHighlightKind::Boolean)
+        );
+    }
+
+    #[test]
+    fn editor_surface_wires_syntax_highlights_into_line_rendering() {
+        let component_source = include_str!("component.rs");
+
+        assert!(component_source.contains("syntax_highlights: Vec<GpuiSyntaxHighlight>"));
+        assert!(component_source.contains("line.syntax_highlights"));
+        assert!(component_source.contains("syntax_highlights_for_line"));
+        assert!(component_source.contains("SyntaxHighlightKind::Error"));
     }
 
     #[test]
