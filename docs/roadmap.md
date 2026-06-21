@@ -85,6 +85,13 @@ Deliverables:
 - compatibility matrix
 - app/component split where it improves reuse without leaking semantics into UI
 
+## Gap Closure Execution Plan
+
+The detailed feature-by-feature backlog is maintained in
+[editor-gap-closure-plan.md](editor-gap-closure-plan.md). Use that document as
+the source of truth for choosing the next implementation task. Each task has a
+scope, acceptance criteria, test expectations, and commit message.
+
 ## Current Direction
 
 The app target is `mocode`; on Windows it must build to `mocode.exe`. New feature work should improve the GPUI app shell and shared core without adding full Mihomo client responsibilities.

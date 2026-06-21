@@ -55,4 +55,4 @@ When saving over an existing file, mocode writes a sibling backup named like `co
 4. Phase 3: editor component hardening: IME, viewport rendering, save/open ergonomics, diagnostics, completions, hover, and chain preview.
 5. Phase 4: reusable component API and host integration notes.
 
-See [docs/roadmap.md](docs/roadmap.md), [docs/spec.md](docs/spec.md), and [docs/prototype-validation-checklist.md](docs/prototype-validation-checklist.md).
+See [docs/roadmap.md](docs/roadmap.md), [docs/editor-gap-closure-plan.md](docs/editor-gap-closure-plan.md), [docs/spec.md](docs/spec.md), and [docs/prototype-validation-checklist.md](docs/prototype-validation-checklist.md).
