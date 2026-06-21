@@ -430,6 +430,53 @@ mod tests {
     }
 
     #[test]
+    fn enter_inherits_current_line_indent() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "dns:\n  enable: true\n",
+            TextPosition::new(1, 14),
+        );
+
+        document.insert_newline().unwrap();
+
+        assert_eq!(document.line_at(2).unwrap().text, "  ");
+        assert_eq!(document.cursor, TextPosition::new(2, 2));
+    }
+
+    #[test]
+    fn enter_indents_after_mapping_key() {
+        let mut document =
+            GpuiEditorDocument::from_text("scratch.yaml", "dns:\n", TextPosition::new(0, 4));
+
+        document.insert_newline().unwrap();
+
+        assert_eq!(document.line_at(1).unwrap().text, "  ");
+        assert_eq!(document.cursor, TextPosition::new(1, 2));
+    }
+
+    #[test]
+    fn enter_indents_after_list_item() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "proxies:\n  - \n",
+            TextPosition::new(1, 4),
+        );
+
+        document.insert_newline().unwrap();
+
+        assert_eq!(document.line_at(2).unwrap().text, "    ");
+        assert_eq!(document.cursor, TextPosition::new(2, 4));
+    }
+
+    #[test]
+    fn enter_action_uses_auto_indent_path() {
+        let component_source = include_str!("component.rs");
+
+        assert!(component_source.contains("insert_newline"));
+        assert!(!component_source.contains("insert_text(\"\\n\")"));
+    }
+
+    #[test]
     fn selection_insert_replaces_selected_text() {
         let mut document = GpuiEditorDocument::from_text(
             "scratch.yaml",

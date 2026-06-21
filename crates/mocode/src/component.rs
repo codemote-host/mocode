@@ -225,6 +225,12 @@ impl GpuiEditorDocument {
         self.commit_text(TAB_WIDTH)
     }
 
+    pub(crate) fn insert_newline(&mut self) -> Result<(), EditorError> {
+        let line_prefix = self.current_line_prefix();
+        let indent = auto_indent_for_line_prefix(&line_prefix);
+        self.commit_text(&format!("\n{indent}"))
+    }
+
     pub(crate) fn outdent_current_line(&mut self) -> Result<(), EditorError> {
         let Some(line_text) = self.editor.line_text(self.cursor.line as usize) else {
             return Ok(());
@@ -920,6 +926,16 @@ impl GpuiEditorDocument {
         self.selection_anchor = None;
     }
 
+    fn current_line_prefix(&self) -> String {
+        let Some(line_text) = self.editor.line_text(self.cursor.line as usize) else {
+            return String::new();
+        };
+        line_text
+            .chars()
+            .take(self.cursor.character as usize)
+            .collect()
+    }
+
     fn document_end_position(&self) -> TextPosition {
         let last_line = self.editor.line_count().saturating_sub(1);
         self.editor
@@ -1038,6 +1054,11 @@ impl GpuiEditorComponent {
 
     fn insert_tab(&mut self) -> Result<(), EditorError> {
         let result = self.document.insert_tab();
+        self.reveal_if_ok(result)
+    }
+
+    fn insert_newline(&mut self) -> Result<(), EditorError> {
+        let result = self.document.insert_newline();
         self.reveal_if_ok(result)
     }
 
@@ -1419,7 +1440,7 @@ where
             if this.editor_component().search_active() {
                 this.editor_component_mut().find_next();
                 cx.notify();
-            } else if this.editor_component_mut().insert_text("\n").is_ok() {
+            } else if this.editor_component_mut().insert_newline().is_ok() {
                 cx.notify();
             }
         }))
@@ -1949,6 +1970,22 @@ fn push_cursor(children: &mut Vec<AnyElement>) {
             .bg(rgb(0x2563eb))
             .into_any_element(),
     );
+}
+
+fn auto_indent_for_line_prefix(line_prefix: &str) -> String {
+    let mut indent = leading_spaces(line_prefix);
+    let trimmed = line_prefix.trim_end();
+    let trimmed_start = trimmed.trim_start();
+
+    if trimmed.ends_with(':') || trimmed_start == "-" || trimmed_start.starts_with("- ") {
+        indent.push_str(TAB_WIDTH);
+    }
+
+    indent
+}
+
+fn leading_spaces(text: &str) -> String {
+    text.chars().take_while(|ch| *ch == ' ').collect()
 }
 
 fn char_to_byte_index(text: &str, char_index: u32) -> usize {
