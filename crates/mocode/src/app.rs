@@ -239,14 +239,7 @@ impl EntityInputHandler for MocodeApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.editor.document().go_to_line_active {
-            self.editor.document_mut().append_go_to_line_input(text);
-            cx.notify();
-            return;
-        }
-
-        if self.editor.document().search_active {
-            self.editor.document_mut().append_search_input(text);
+        if self.editor.route_command_text_input(text) {
             cx.notify();
             return;
         }
@@ -264,14 +257,7 @@ impl EntityInputHandler for MocodeApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.editor.document().go_to_line_active {
-            self.editor.document_mut().append_go_to_line_input(new_text);
-            cx.notify();
-            return;
-        }
-
-        if self.editor.document().search_active {
-            self.editor.document_mut().append_search_input(new_text);
+        if self.editor.route_command_text_input(new_text) {
             cx.notify();
             return;
         }

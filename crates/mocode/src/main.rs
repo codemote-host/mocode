@@ -20,8 +20,9 @@ mod tests {
     use crate::{
         app,
         component::{
-            GpuiEditorDocument, GpuiEditorSaveError, GpuiSearchHighlight, MouseDownSelectionPolicy,
-            find_bar_label, go_to_line_bar_label, mouse_down_selection_policy,
+            EditorCommandMode, GpuiEditorDocument, GpuiEditorSaveError, GpuiSearchHighlight,
+            MouseDownSelectionPolicy, find_bar_label, go_to_line_bar_label,
+            mouse_down_selection_policy,
         },
         fixtures::{SAMPLE_TITLE, default_fixture, document_by_fixture_id, document_from_fixture},
     };
@@ -845,14 +846,284 @@ mod tests {
     }
 
     #[test]
+    fn mode_search_routes_text_backspace_enter_escape_without_editing_yaml() {
+        let mut document = GpuiEditorDocument::from_text(
+            "search.yaml",
+            "alpha\nbeta alpha\n",
+            TextPosition::new(0, 0),
+        );
+        let original_text = document.text();
+
+        document.start_search_from_selection();
+
+        assert_eq!(document.command_mode(), EditorCommandMode::Search);
+        assert!(document.route_command_text_input("alpha"));
+        assert_eq!(document.text(), original_text);
+        assert_eq!(document.search_query, "alpha");
+
+        assert!(document.handle_command_backspace().unwrap().handled);
+        assert_eq!(document.text(), original_text);
+        assert_eq!(document.search_query, "alph");
+
+        assert!(document.handle_command_enter().unwrap().handled);
+        assert_eq!(document.text(), original_text);
+        assert!(document.search_active);
+
+        assert!(document.handle_command_escape().unwrap().handled);
+        assert_eq!(document.command_mode(), EditorCommandMode::Normal);
+        assert_eq!(document.text(), original_text);
+    }
+
+    #[test]
+    fn mode_search_delete_is_handled_without_editing_yaml() {
+        let mut document =
+            GpuiEditorDocument::from_text("search.yaml", "alpha\n", TextPosition::new(0, 0));
+        let original_text = document.text();
+
+        document.start_search_from_selection();
+
+        assert_eq!(document.command_mode(), EditorCommandMode::Search);
+        assert!(document.handle_command_delete().unwrap().handled);
+        assert_eq!(document.text(), original_text);
+        assert_eq!(document.command_mode(), EditorCommandMode::Search);
+    }
+
+    #[test]
+    fn mode_search_text_input_does_not_edit_yaml_if_completion_popup_lingers() {
+        let mut document = GpuiEditorDocument::from_text(
+            "dns.yaml",
+            "dns:\n  enhanced-mode: f\n",
+            TextPosition::new(1, 19),
+        );
+        let original_text = document.text();
+        document.search_active = true;
+
+        assert_eq!(document.command_mode(), EditorCommandMode::Completion);
+        assert!(document.route_command_text_input("alpha"));
+        assert_eq!(document.text(), original_text);
+        assert_eq!(document.search_query, "alpha");
+    }
+
+    #[test]
+    fn mode_search_backspace_does_not_edit_yaml_if_completion_popup_lingers() {
+        let mut document = GpuiEditorDocument::from_text(
+            "dns.yaml",
+            "dns:\n  enhanced-mode: f\n",
+            TextPosition::new(1, 19),
+        );
+        let original_text = document.text();
+        document.search_active = true;
+        document.search_query = "alpha".to_string();
+
+        assert_eq!(document.command_mode(), EditorCommandMode::Completion);
+        assert!(document.handle_command_backspace().unwrap().handled);
+        assert_eq!(document.text(), original_text);
+        assert_eq!(document.search_query, "alph");
+    }
+
+    #[test]
+    fn mode_search_enter_does_not_accept_completion_if_completion_popup_lingers() {
+        let mut document = GpuiEditorDocument::from_text(
+            "dns.yaml",
+            "dns:\n  enhanced-mode: f\ndns:\n",
+            TextPosition::new(1, 19),
+        );
+        let original_text = document.text();
+        document.search_active = true;
+        document.search_query = "dns".to_string();
+
+        assert_eq!(document.command_mode(), EditorCommandMode::Completion);
+        assert!(document.handle_command_enter().unwrap().handled);
+        assert_eq!(document.text(), original_text);
+        assert!(document.search_active);
+        assert_eq!(document.selected_text().as_deref(), Some("dns"));
+        assert_eq!(document.cursor, TextPosition::new(0, 3));
+    }
+
+    #[test]
+    fn mode_search_tab_is_consumed_without_accepting_completion_if_completion_popup_lingers() {
+        let mut document = GpuiEditorDocument::from_text(
+            "dns.yaml",
+            "dns:\n  enhanced-mode: f\n",
+            TextPosition::new(1, 19),
+        );
+        let original_text = document.text();
+        document.search_active = true;
+        document.search_query = "alpha".to_string();
+
+        assert_eq!(document.command_mode(), EditorCommandMode::Completion);
+        assert!(document.handle_command_tab().unwrap().handled);
+        assert_eq!(document.text(), original_text);
+        assert_eq!(document.search_query, "alpha");
+        assert!(document.search_active);
+    }
+
+    #[test]
+    fn mode_search_escape_closes_stale_completion_before_search() {
+        let mut document = GpuiEditorDocument::from_text(
+            "dns.yaml",
+            "dns:\n  enhanced-mode: f\n",
+            TextPosition::new(1, 19),
+        );
+        let original_text = document.text();
+        document.search_active = true;
+        document.search_query = "alpha".to_string();
+
+        assert_eq!(document.command_mode(), EditorCommandMode::Completion);
+        assert!(document.handle_command_escape().unwrap().handled);
+        assert_eq!(document.text(), original_text);
+        assert!(document.search_active);
+        assert_eq!(document.command_mode(), EditorCommandMode::Search);
+
+        assert!(document.handle_command_escape().unwrap().handled);
+        assert_eq!(document.text(), original_text);
+        assert_eq!(document.command_mode(), EditorCommandMode::Normal);
+    }
+
+    #[test]
+    fn mode_command_outcome_distinguishes_consumed_keys_from_cursor_reveal() {
+        let mut invalid_jump = GpuiEditorDocument::from_text(
+            "jump.yaml",
+            "mixed-port: 7890\nmode: rule\n",
+            TextPosition::new(0, 0),
+        );
+        invalid_jump.start_go_to_line();
+        invalid_jump.append_go_to_line_input("x");
+
+        let invalid_jump_outcome = invalid_jump.handle_command_enter().unwrap();
+        assert!(invalid_jump_outcome.handled);
+        assert!(!invalid_jump_outcome.reveal_cursor);
+
+        let mut missing_search =
+            GpuiEditorDocument::from_text("search.yaml", "alpha\n", TextPosition::new(0, 0));
+        missing_search.set_search_query("missing");
+
+        let missing_search_outcome = missing_search.handle_command_enter().unwrap();
+        assert!(missing_search_outcome.handled);
+        assert!(!missing_search_outcome.reveal_cursor);
+
+        let mut search_delete =
+            GpuiEditorDocument::from_text("search.yaml", "alpha\n", TextPosition::new(0, 0));
+        search_delete.set_search_query("alpha");
+
+        let search_delete_outcome = search_delete.handle_command_delete().unwrap();
+        assert!(search_delete_outcome.handled);
+        assert!(!search_delete_outcome.reveal_cursor);
+
+        let mut go_to_line_tab =
+            GpuiEditorDocument::from_text("jump.yaml", "alpha\n", TextPosition::new(0, 0));
+        go_to_line_tab.start_go_to_line();
+
+        let go_to_line_tab_outcome = go_to_line_tab.handle_command_tab().unwrap();
+        assert!(go_to_line_tab_outcome.handled);
+        assert!(!go_to_line_tab_outcome.reveal_cursor);
+    }
+
+    #[test]
+    fn mode_go_to_line_routes_text_backspace_enter_escape_without_editing_yaml() {
+        let mut document = GpuiEditorDocument::from_text(
+            "jump.yaml",
+            "mixed-port: 7890\nmode: rule\nlog-level: info",
+            TextPosition::new(0, 0),
+        );
+        let original_text = document.text();
+
+        document.start_go_to_line();
+
+        assert_eq!(document.command_mode(), EditorCommandMode::GoToLine);
+        assert!(document.route_command_text_input("3x"));
+        assert_eq!(document.text(), original_text);
+        assert_eq!(document.go_to_line_query, "3");
+
+        assert!(document.handle_command_backspace().unwrap().handled);
+        assert_eq!(document.text(), original_text);
+        assert_eq!(document.go_to_line_query, "");
+
+        assert!(document.route_command_text_input("2"));
+        assert!(document.handle_command_enter().unwrap().handled);
+        assert_eq!(document.text(), original_text);
+        assert_eq!(document.cursor, TextPosition::new(1, 0));
+        assert_eq!(document.command_mode(), EditorCommandMode::Normal);
+
+        document.start_go_to_line();
+        assert!(document.handle_command_escape().unwrap().handled);
+        assert_eq!(document.command_mode(), EditorCommandMode::Normal);
+        assert_eq!(document.text(), original_text);
+    }
+
+    #[test]
+    fn mode_go_to_line_delete_is_handled_without_editing_yaml() {
+        let mut document =
+            GpuiEditorDocument::from_text("jump.yaml", "a\nb\n", TextPosition::new(0, 0));
+        let original_text = document.text();
+
+        document.start_go_to_line();
+
+        assert_eq!(document.command_mode(), EditorCommandMode::GoToLine);
+        assert!(document.handle_command_delete().unwrap().handled);
+        assert_eq!(document.text(), original_text);
+        assert_eq!(document.command_mode(), EditorCommandMode::GoToLine);
+    }
+
+    #[test]
+    fn mode_completion_accepts_enter_tab_and_escape_closes_before_search() {
+        let mut document = GpuiEditorDocument::from_text(
+            "dns.yaml",
+            "dns:\n  enhanced-mode: f\n",
+            TextPosition::new(1, 19),
+        );
+
+        assert_eq!(document.command_mode(), EditorCommandMode::Completion);
+        assert!(document.handle_command_enter().unwrap().handled);
+        assert_eq!(
+            document.line_at(1).unwrap().text,
+            "  enhanced-mode: fake-ip"
+        );
+        assert_eq!(document.command_mode(), EditorCommandMode::Normal);
+
+        let mut tab_document = GpuiEditorDocument::from_text(
+            "dns.yaml",
+            "dns:\n  enhanced-mode: f\n",
+            TextPosition::new(1, 19),
+        );
+
+        assert_eq!(tab_document.command_mode(), EditorCommandMode::Completion);
+        assert!(tab_document.handle_command_tab().unwrap().handled);
+        assert_eq!(
+            tab_document.line_at(1).unwrap().text,
+            "  enhanced-mode: fake-ip"
+        );
+        assert_eq!(tab_document.command_mode(), EditorCommandMode::Normal);
+
+        let mut escape_document = GpuiEditorDocument::from_text(
+            "dns.yaml",
+            "dns:\n  enhanced-mode: f\n",
+            TextPosition::new(1, 19),
+        );
+        escape_document.search_active = true;
+
+        assert_eq!(
+            escape_document.command_mode(),
+            EditorCommandMode::Completion
+        );
+        assert!(escape_document.handle_command_escape().unwrap().handled);
+        assert!(escape_document.search_active);
+        assert_eq!(escape_document.command_mode(), EditorCommandMode::Search);
+        assert!(escape_document.handle_command_escape().unwrap().handled);
+        assert_eq!(escape_document.command_mode(), EditorCommandMode::Normal);
+    }
+
+    #[test]
     fn completion_acceptance_is_wired_before_tab_and_enter_fallbacks() {
         let component_source = include_str!("component.rs");
 
-        assert!(component_source.contains("accept_completion"));
+        assert!(component_source.contains("handle_command_tab()"));
+        assert!(component_source.contains("handle_command_enter()"));
+        assert!(component_source.contains("accept_completion()?"));
         assert!(component_source.contains("select_next_completion"));
         assert!(component_source.contains("select_previous_completion"));
-        assert!(component_source.contains("else if this.editor_component_mut().insert_tab()"));
-        assert!(component_source.contains("else if this.editor_component_mut().insert_newline()"));
+        assert!(component_source.contains("EditorCommandMode::Completion"));
+        assert!(component_source.contains("EditorCommandMode::Normal"));
         assert!(component_source.contains("else if this.editor_component_mut().move_down()"));
         assert!(component_source.contains("else if this.editor_component_mut().move_up()"));
     }
@@ -1824,12 +2095,10 @@ mod tests {
     #[test]
     fn text_input_routes_to_go_to_line_before_search_or_buffer() {
         let app_source = include_str!("app.rs");
-        let go_to_line_index = app_source.find("go_to_line_active").unwrap();
-        let search_index = app_source.find("search_active").unwrap();
+        let command_route_index = app_source.find("route_command_text_input").unwrap();
         let replace_index = app_source.find("replace_utf16_range").unwrap();
 
-        assert!(go_to_line_index < search_index);
-        assert!(go_to_line_index < replace_index);
+        assert!(command_route_index < replace_index);
     }
 
     #[test]

@@ -126,6 +126,43 @@ pub(crate) struct GpuiSearchHighlight {
     pub(crate) active: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EditorCommandMode {
+    Normal,
+    Search,
+    GoToLine,
+    Completion,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EditorCommandOutcome {
+    pub(crate) handled: bool,
+    pub(crate) reveal_cursor: bool,
+}
+
+impl EditorCommandOutcome {
+    const fn ignored() -> Self {
+        Self {
+            handled: false,
+            reveal_cursor: false,
+        }
+    }
+
+    const fn consumed() -> Self {
+        Self {
+            handled: true,
+            reveal_cursor: false,
+        }
+    }
+
+    const fn revealed() -> Self {
+        Self {
+            handled: true,
+            reveal_cursor: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum GpuiEditorSaveError {
     MissingPath,
@@ -339,6 +376,143 @@ impl GpuiEditorDocument {
         self.completion_popup = None;
         self.completion_popup_suppressed_at = Some(self.cursor);
         true
+    }
+
+    pub(crate) fn command_mode(&self) -> EditorCommandMode {
+        if self.completion_popup.is_some() {
+            EditorCommandMode::Completion
+        } else if self.go_to_line_active {
+            EditorCommandMode::GoToLine
+        } else if self.search_active {
+            EditorCommandMode::Search
+        } else {
+            EditorCommandMode::Normal
+        }
+    }
+
+    fn editing_command_mode(&self) -> EditorCommandMode {
+        // Editing keys let active command bars consume input before a stale popup;
+        // Escape keeps the separate completion-first priority in handle_command_escape.
+        if self.go_to_line_active {
+            EditorCommandMode::GoToLine
+        } else if self.search_active {
+            EditorCommandMode::Search
+        } else {
+            self.command_mode()
+        }
+    }
+
+    pub(crate) fn route_command_text_input(&mut self, text: &str) -> bool {
+        if self.go_to_line_active {
+            self.append_go_to_line_input(text);
+            true
+        } else if self.search_active {
+            self.append_search_input(text);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn handle_command_backspace(&mut self) -> Result<EditorCommandOutcome, EditorError> {
+        match self.editing_command_mode() {
+            EditorCommandMode::GoToLine => {
+                self.go_to_line_backspace();
+                Ok(EditorCommandOutcome::consumed())
+            }
+            EditorCommandMode::Search => {
+                self.search_backspace();
+                Ok(EditorCommandOutcome::consumed())
+            }
+            EditorCommandMode::Normal | EditorCommandMode::Completion => {
+                self.backspace()?;
+                Ok(EditorCommandOutcome::revealed())
+            }
+        }
+    }
+
+    pub(crate) fn handle_command_delete(&mut self) -> Result<EditorCommandOutcome, EditorError> {
+        match self.editing_command_mode() {
+            EditorCommandMode::GoToLine | EditorCommandMode::Search => {
+                Ok(EditorCommandOutcome::consumed())
+            }
+            EditorCommandMode::Normal | EditorCommandMode::Completion => {
+                self.delete()?;
+                Ok(EditorCommandOutcome::revealed())
+            }
+        }
+    }
+
+    pub(crate) fn handle_command_enter(&mut self) -> Result<EditorCommandOutcome, EditorError> {
+        match self.editing_command_mode() {
+            EditorCommandMode::Completion => {
+                if self.accept_completion()? {
+                    Ok(EditorCommandOutcome::revealed())
+                } else {
+                    Ok(if self.close_completion_popup() {
+                        EditorCommandOutcome::consumed()
+                    } else {
+                        EditorCommandOutcome::ignored()
+                    })
+                }
+            }
+            EditorCommandMode::GoToLine => Ok(if self.submit_go_to_line() {
+                EditorCommandOutcome::revealed()
+            } else {
+                EditorCommandOutcome::consumed()
+            }),
+            EditorCommandMode::Search => Ok(if self.find_next() {
+                EditorCommandOutcome::revealed()
+            } else {
+                EditorCommandOutcome::consumed()
+            }),
+            EditorCommandMode::Normal => {
+                self.insert_newline()?;
+                Ok(EditorCommandOutcome::revealed())
+            }
+        }
+    }
+
+    pub(crate) fn handle_command_escape(&mut self) -> Result<EditorCommandOutcome, EditorError> {
+        match self.command_mode() {
+            EditorCommandMode::Completion => Ok(if self.close_completion_popup() {
+                EditorCommandOutcome::consumed()
+            } else {
+                EditorCommandOutcome::ignored()
+            }),
+            EditorCommandMode::GoToLine => {
+                self.close_go_to_line();
+                Ok(EditorCommandOutcome::consumed())
+            }
+            EditorCommandMode::Search => {
+                self.close_search();
+                Ok(EditorCommandOutcome::consumed())
+            }
+            EditorCommandMode::Normal => Ok(EditorCommandOutcome::ignored()),
+        }
+    }
+
+    pub(crate) fn handle_command_tab(&mut self) -> Result<EditorCommandOutcome, EditorError> {
+        match self.editing_command_mode() {
+            EditorCommandMode::Completion => {
+                if self.accept_completion()? {
+                    Ok(EditorCommandOutcome::revealed())
+                } else {
+                    Ok(if self.close_completion_popup() {
+                        EditorCommandOutcome::consumed()
+                    } else {
+                        EditorCommandOutcome::ignored()
+                    })
+                }
+            }
+            EditorCommandMode::Normal => {
+                self.insert_tab()?;
+                Ok(EditorCommandOutcome::revealed())
+            }
+            EditorCommandMode::GoToLine | EditorCommandMode::Search => {
+                Ok(EditorCommandOutcome::consumed())
+            }
+        }
     }
 
     pub(crate) fn commit_text(&mut self, text: &str) -> Result<(), EditorError> {
@@ -1585,14 +1759,6 @@ impl GpuiEditorComponent {
         self.reveal_if_ok(result)
     }
 
-    fn accept_completion(&mut self) -> Result<bool, EditorError> {
-        let accepted = self.document.accept_completion()?;
-        if accepted {
-            self.reveal_cursor();
-        }
-        Ok(accepted)
-    }
-
     fn accept_completion_at(&mut self, index: usize) -> Result<bool, EditorError> {
         let accepted = self.document.accept_completion_at(index)?;
         if accepted {
@@ -1617,13 +1783,44 @@ impl GpuiEditorComponent {
         self.document.select_previous_completion()
     }
 
-    fn close_completion_popup(&mut self) -> bool {
-        self.document.close_completion_popup()
+    pub(crate) fn route_command_text_input(&mut self, text: &str) -> bool {
+        self.document.route_command_text_input(text)
     }
 
-    fn insert_tab(&mut self) -> Result<(), EditorError> {
-        let result = self.document.insert_tab();
-        self.reveal_if_ok(result)
+    fn handle_command_backspace(&mut self) -> Result<EditorCommandOutcome, EditorError> {
+        let outcome = self.document.handle_command_backspace()?;
+        if outcome.reveal_cursor {
+            self.reveal_cursor();
+        }
+        Ok(outcome)
+    }
+
+    fn handle_command_delete(&mut self) -> Result<EditorCommandOutcome, EditorError> {
+        let outcome = self.document.handle_command_delete()?;
+        if outcome.reveal_cursor {
+            self.reveal_cursor();
+        }
+        Ok(outcome)
+    }
+
+    fn handle_command_enter(&mut self) -> Result<EditorCommandOutcome, EditorError> {
+        let outcome = self.document.handle_command_enter()?;
+        if outcome.reveal_cursor {
+            self.reveal_cursor();
+        }
+        Ok(outcome)
+    }
+
+    fn handle_command_escape(&mut self) -> Result<EditorCommandOutcome, EditorError> {
+        self.document.handle_command_escape()
+    }
+
+    fn handle_command_tab(&mut self) -> Result<EditorCommandOutcome, EditorError> {
+        let outcome = self.document.handle_command_tab()?;
+        if outcome.reveal_cursor {
+            self.reveal_cursor();
+        }
+        Ok(outcome)
     }
 
     fn toggle_line_comment(&mut self) -> Result<(), EditorError> {
@@ -1631,23 +1828,8 @@ impl GpuiEditorComponent {
         self.reveal_if_ok(result)
     }
 
-    fn insert_newline(&mut self) -> Result<(), EditorError> {
-        let result = self.document.insert_newline();
-        self.reveal_if_ok(result)
-    }
-
     fn outdent_current_line(&mut self) -> Result<(), EditorError> {
         let result = self.document.outdent_current_line();
-        self.reveal_if_ok(result)
-    }
-
-    fn backspace(&mut self) -> Result<(), EditorError> {
-        let result = self.document.backspace();
-        self.reveal_if_ok(result)
-    }
-
-    fn delete(&mut self) -> Result<(), EditorError> {
-        let result = self.document.delete();
         self.reveal_if_ok(result)
     }
 
@@ -1792,38 +1974,6 @@ impl GpuiEditorComponent {
         self.document.start_go_to_line();
     }
 
-    fn search_backspace(&mut self) {
-        self.document.search_backspace();
-    }
-
-    fn go_to_line_backspace(&mut self) {
-        self.document.go_to_line_backspace();
-    }
-
-    fn close_search(&mut self) {
-        self.document.close_search();
-    }
-
-    fn close_go_to_line(&mut self) {
-        self.document.close_go_to_line();
-    }
-
-    fn search_active(&self) -> bool {
-        self.document.search_active
-    }
-
-    fn go_to_line_active(&self) -> bool {
-        self.document.go_to_line_active
-    }
-
-    fn submit_go_to_line(&mut self) -> bool {
-        let jumped = self.document.submit_go_to_line();
-        if jumped {
-            self.reveal_cursor();
-        }
-        jumped
-    }
-
     fn find_next(&mut self) -> bool {
         let found = self.document.find_next();
         if found {
@@ -1955,20 +2105,20 @@ where
         .key_context("MocodeEditor")
         .on_action(
             cx.listener(|this: &mut T, _: &Backspace, _: &mut Window, cx| {
-                if this.editor_component().go_to_line_active() {
-                    this.editor_component_mut().go_to_line_backspace();
-                    cx.notify();
-                } else if this.editor_component().search_active() {
-                    this.editor_component_mut().search_backspace();
-                    cx.notify();
-                } else if this.editor_component_mut().backspace().is_ok() {
+                if this
+                    .editor_component_mut()
+                    .handle_command_backspace()
+                    .is_ok_and(|outcome| outcome.handled)
+                {
                     cx.notify();
                 }
             }),
         )
         .on_action(cx.listener(|this: &mut T, _: &Delete, _: &mut Window, cx| {
-            if this.editor_component().go_to_line_active()
-                || this.editor_component_mut().delete().is_ok()
+            if this
+                .editor_component_mut()
+                .handle_command_delete()
+                .is_ok_and(|outcome| outcome.handled)
             {
                 cx.notify();
             }
@@ -1976,11 +2126,9 @@ where
         .on_action(cx.listener(|this: &mut T, _: &Tab, _: &mut Window, cx| {
             if this
                 .editor_component_mut()
-                .accept_completion()
-                .is_ok_and(|accepted| accepted)
+                .handle_command_tab()
+                .is_ok_and(|outcome| outcome.handled)
             {
-                cx.notify();
-            } else if this.editor_component_mut().insert_tab().is_ok() {
                 cx.notify();
             }
         }))
@@ -2088,31 +2236,21 @@ where
         )
         .on_action(
             cx.listener(|this: &mut T, _: &EscapeSearch, _: &mut Window, cx| {
-                if this.editor_component_mut().close_completion_popup() {
-                    cx.notify();
-                } else if this.editor_component().go_to_line_active() {
-                    this.editor_component_mut().close_go_to_line();
-                    cx.notify();
-                } else {
-                    this.editor_component_mut().close_search();
+                if this
+                    .editor_component_mut()
+                    .handle_command_escape()
+                    .is_ok_and(|outcome| outcome.handled)
+                {
                     cx.notify();
                 }
             }),
         )
         .on_action(cx.listener(|this: &mut T, _: &Enter, _: &mut Window, cx| {
-            if this.editor_component().go_to_line_active() {
-                this.editor_component_mut().submit_go_to_line();
-                cx.notify();
-            } else if this.editor_component().search_active() {
-                this.editor_component_mut().find_next();
-                cx.notify();
-            } else if this
+            if this
                 .editor_component_mut()
-                .accept_completion()
-                .is_ok_and(|accepted| accepted)
+                .handle_command_enter()
+                .is_ok_and(|outcome| outcome.handled)
             {
-                cx.notify();
-            } else if this.editor_component_mut().insert_newline().is_ok() {
                 cx.notify();
             }
         }))
