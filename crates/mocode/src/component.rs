@@ -102,6 +102,7 @@ pub(crate) struct GpuiEditorCompletion {
 pub(crate) struct GpuiEditorCompletionPopup {
     pub(crate) anchor_line: u32,
     pub(crate) anchor_column: u32,
+    pub(crate) selected_index: usize,
     pub(crate) items: Vec<GpuiEditorCompletion>,
 }
 
@@ -233,7 +234,10 @@ impl GpuiEditorDocument {
             return Ok(false);
         }
 
-        let Some(insert_text) = completion_insert_text(&self.completion_items, &prefix) else {
+        let Some(insert_text) = self
+            .selected_completion_insert_text(&prefix)
+            .or_else(|| completion_insert_text(&self.completion_items, &prefix))
+        else {
             return Ok(false);
         };
 
@@ -245,6 +249,14 @@ impl GpuiEditorDocument {
         self.mark_dirty();
         self.refresh_derived();
         Ok(true)
+    }
+
+    pub(crate) fn select_next_completion(&mut self) -> bool {
+        self.select_completion(CompletionSelection::Next)
+    }
+
+    pub(crate) fn select_previous_completion(&mut self) -> bool {
+        self.select_completion(CompletionSelection::Previous)
     }
 
     pub(crate) fn commit_text(&mut self, text: &str) -> Result<(), EditorError> {
@@ -965,7 +977,26 @@ impl GpuiEditorDocument {
             .iter()
             .map(|completion| completion.label.clone())
             .collect();
-        self.completion_popup = build_completion_popup(self.cursor, &self.completion_items);
+        let selected_index = self
+            .completion_popup
+            .as_ref()
+            .filter(|popup| {
+                popup.anchor_line == self.cursor.line + 1
+                    && popup.anchor_column == self.cursor.character + 1
+            })
+            .map(|popup| popup.selected_index)
+            .unwrap_or(0);
+        let completion_prefix = self
+            .completion_prefix_range()
+            .map(|(prefix, _)| prefix)
+            .unwrap_or_default();
+        self.completion_popup = build_completion_popup(
+            self.cursor,
+            &self.completion_items,
+            selected_index,
+            &completion_prefix,
+            can_accept_empty_completion(&self.current_line_prefix()),
+        );
         if let Some(hover) = self.editor.hover_summary_at(self.cursor) {
             self.hover_title = hover.title;
             self.hover_body = hover.body;
@@ -1030,6 +1061,42 @@ impl GpuiEditorDocument {
                 TextPosition::new(self.cursor.line, cursor_character),
             ),
         ))
+    }
+
+    fn selected_completion_insert_text(&self, prefix: &str) -> Option<String> {
+        let popup = self.completion_popup.as_ref()?;
+        let selected = popup.items.get(popup.selected_index)?;
+
+        if prefix.is_empty()
+            || starts_with_ignore_ascii_case(&selected.insert_text, prefix)
+            || starts_with_ignore_ascii_case(&selected.label, prefix)
+        {
+            Some(selected.insert_text.clone())
+        } else {
+            None
+        }
+    }
+
+    fn select_completion(&mut self, selection: CompletionSelection) -> bool {
+        let Some(popup) = self.completion_popup.as_mut() else {
+            return false;
+        };
+        if popup.items.is_empty() {
+            return false;
+        }
+
+        let len = popup.items.len();
+        popup.selected_index = match selection {
+            CompletionSelection::Next => (popup.selected_index + 1) % len,
+            CompletionSelection::Previous => {
+                if popup.selected_index == 0 {
+                    len - 1
+                } else {
+                    popup.selected_index - 1
+                }
+            }
+        };
+        true
     }
 
     fn comment_line_range(&self) -> Option<(u32, u32)> {
@@ -1180,6 +1247,14 @@ impl GpuiEditorComponent {
             self.reveal_cursor();
         }
         Ok(accepted)
+    }
+
+    fn select_next_completion(&mut self) -> bool {
+        self.document.select_next_completion()
+    }
+
+    fn select_previous_completion(&mut self) -> bool {
+        self.document.select_previous_completion()
     }
 
     fn insert_tab(&mut self) -> Result<(), EditorError> {
@@ -1601,12 +1676,16 @@ where
             }
         }))
         .on_action(cx.listener(|this: &mut T, _: &Up, _: &mut Window, cx| {
-            if this.editor_component_mut().move_up().is_ok() {
+            if this.editor_component_mut().select_previous_completion() {
+                cx.notify();
+            } else if this.editor_component_mut().move_up().is_ok() {
                 cx.notify();
             }
         }))
         .on_action(cx.listener(|this: &mut T, _: &Down, _: &mut Window, cx| {
-            if this.editor_component_mut().move_down().is_ok() {
+            if this.editor_component_mut().select_next_completion() {
+                cx.notify();
+            } else if this.editor_component_mut().move_down().is_ok() {
                 cx.notify();
             }
         }))
@@ -2265,6 +2344,12 @@ fn starts_with_ignore_ascii_case(text: &str, prefix: &str) -> bool {
         .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompletionSelection {
+    Next,
+    Previous,
+}
+
 fn normalize_pasted_yaml_indentation(text: &str, line_prefix: &str) -> String {
     if !text.contains('\n') {
         return text.to_string();
@@ -2561,12 +2646,41 @@ mod mouse_tests {
 fn build_completion_popup(
     cursor: TextPosition,
     completion_items: &[GpuiEditorCompletion],
+    selected_index: usize,
+    prefix: &str,
+    can_accept_empty: bool,
 ) -> Option<GpuiEditorCompletionPopup> {
-    (!completion_items.is_empty()).then(|| GpuiEditorCompletionPopup {
+    let visible_items = visible_completion_items(completion_items, prefix, can_accept_empty);
+    let selected_index = selected_index.min(visible_items.len().saturating_sub(1));
+
+    (!visible_items.is_empty()).then(|| GpuiEditorCompletionPopup {
         anchor_line: cursor.line + 1,
         anchor_column: cursor.character + 1,
-        items: completion_items.iter().take(6).cloned().collect(),
+        selected_index,
+        items: visible_items,
     })
+}
+
+fn visible_completion_items(
+    completion_items: &[GpuiEditorCompletion],
+    prefix: &str,
+    can_accept_empty: bool,
+) -> Vec<GpuiEditorCompletion> {
+    if prefix.is_empty() {
+        return can_accept_empty
+            .then(|| completion_items.iter().take(6).cloned().collect())
+            .unwrap_or_default();
+    }
+
+    completion_items
+        .iter()
+        .filter(|completion| {
+            starts_with_ignore_ascii_case(&completion.insert_text, prefix)
+                || starts_with_ignore_ascii_case(&completion.label, prefix)
+        })
+        .take(6)
+        .cloned()
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

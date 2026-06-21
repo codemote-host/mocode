@@ -317,6 +317,7 @@ mod tests {
         let popup = document.completion_popup.as_ref().unwrap();
         assert_eq!(popup.anchor_line, 4);
         assert_eq!(popup.anchor_column, 19);
+        assert_eq!(popup.selected_index, 0);
         assert!(popup.items.iter().any(|item| item.label == "exit"
             && item.insert_text == "exit"
             && item.kind == "reference"));
@@ -434,6 +435,62 @@ mod tests {
     }
 
     #[test]
+    fn daily_completion_down_selects_next_item_for_acceptance() {
+        let mut document =
+            GpuiEditorDocument::from_text("scratch.yaml", "mode: \n", TextPosition::new(0, 6));
+
+        assert_eq!(
+            document
+                .completion_popup
+                .as_ref()
+                .unwrap()
+                .items
+                .iter()
+                .map(|item| item.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["rule", "global", "direct"]
+        );
+        assert!(document.select_next_completion());
+        assert_eq!(
+            document.completion_popup.as_ref().unwrap().selected_index,
+            1
+        );
+        assert!(document.accept_completion().unwrap());
+
+        assert_eq!(document.line_at(0).unwrap().text, "mode: global");
+        assert_eq!(document.cursor, TextPosition::new(0, 12));
+    }
+
+    #[test]
+    fn daily_completion_up_wraps_to_last_item_for_acceptance() {
+        let mut document =
+            GpuiEditorDocument::from_text("scratch.yaml", "mode: \n", TextPosition::new(0, 6));
+
+        assert!(document.select_previous_completion());
+        assert_eq!(
+            document.completion_popup.as_ref().unwrap().selected_index,
+            2
+        );
+        assert!(document.accept_completion().unwrap());
+
+        assert_eq!(document.line_at(0).unwrap().text, "mode: direct");
+        assert_eq!(document.cursor, TextPosition::new(0, 12));
+    }
+
+    #[test]
+    fn daily_completion_selection_returns_false_without_popup() {
+        let mut document = GpuiEditorDocument::from_text(
+            "scratch.yaml",
+            "mixed-port: 7890\n",
+            TextPosition::new(0, 16),
+        );
+
+        assert!(document.completion_popup.is_none());
+        assert!(!document.select_next_completion());
+        assert!(!document.select_previous_completion());
+    }
+
+    #[test]
     fn daily_accept_completion_ignores_plain_blank_indent() {
         let mut document =
             GpuiEditorDocument::from_text("scratch.yaml", "dns:\n  \n", TextPosition::new(1, 2));
@@ -448,8 +505,12 @@ mod tests {
         let component_source = include_str!("component.rs");
 
         assert!(component_source.contains("accept_completion"));
+        assert!(component_source.contains("select_next_completion"));
+        assert!(component_source.contains("select_previous_completion"));
         assert!(component_source.contains("else if this.editor_component_mut().insert_tab()"));
         assert!(component_source.contains("else if this.editor_component_mut().insert_newline()"));
+        assert!(component_source.contains("else if this.editor_component_mut().move_down()"));
+        assert!(component_source.contains("else if this.editor_component_mut().move_up()"));
     }
 
     #[test]
