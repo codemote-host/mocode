@@ -656,6 +656,31 @@ mod tests {
     }
 
     #[test]
+    fn missing_reference_diagnostics_keep_source_ranges() {
+        let editor = MocodeEditor::open_text(include_str!(
+            "../../../examples/configs/invalid-reference.yaml"
+        ));
+        let diagnostics = editor.diagnostics();
+
+        for missing in [
+            "missing-dialer",
+            "missing-proxy",
+            "missing-group",
+            "missing-rule-provider",
+        ] {
+            let diagnostic = diagnostics
+                .iter()
+                .find(|diagnostic| diagnostic.message.contains(missing))
+                .unwrap_or_else(|| panic!("missing diagnostic for {missing}"));
+
+            assert!(
+                diagnostic.range.is_some(),
+                "diagnostic for {missing} should keep lint range"
+            );
+        }
+    }
+
+    #[test]
     fn reports_dialer_proxy_cycle_from_core() {
         let editor =
             MocodeEditor::open_text(include_str!("../../../tests/fixtures/dialer-cycle.yaml"));

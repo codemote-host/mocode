@@ -302,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn daily_jump_to_unranged_diagnostic_returns_false() {
+    fn daily_jump_to_missing_reference_diagnostic_moves_cursor_to_reference() {
         let mut document = GpuiEditorDocument::from_text(
             "invalid-reference.yaml",
             include_str!("../../../examples/configs/invalid-reference.yaml"),
@@ -311,11 +311,25 @@ mod tests {
         let diagnostic_index = document
             .diagnostics
             .iter()
-            .position(|diagnostic| diagnostic.line.is_none() && diagnostic.column.is_none())
+            .position(|diagnostic| {
+                diagnostic.code == "mihomo.reference.missing"
+                    && diagnostic.message.contains("missing-dialer")
+            })
             .unwrap();
+        let diagnostic = document.diagnostics[diagnostic_index].clone();
 
-        assert!(!document.jump_to_diagnostic(diagnostic_index));
-        assert_eq!(document.cursor, TextPosition::new(0, 0));
+        assert!(document.jump_to_diagnostic(diagnostic_index));
+
+        assert_eq!(diagnostic.line, Some(11));
+        assert_eq!(diagnostic.column, Some(19));
+        assert_eq!(document.cursor, TextPosition::new(10, 18));
+        assert_eq!(
+            document
+                .line_at(document.cursor.line as usize)
+                .unwrap()
+                .text,
+            "    dialer-proxy: missing-dialer"
+        );
     }
 
     #[test]
