@@ -250,7 +250,16 @@ impl GpuiEditorDocument {
         self.clear_selection();
         self.mark_dirty();
         self.refresh_derived();
+        self.completion_popup = None;
         Ok(true)
+    }
+
+    pub(crate) fn accept_completion_at(&mut self, index: usize) -> Result<bool, EditorError> {
+        if !self.select_completion_index(index) {
+            return Ok(false);
+        }
+
+        self.accept_completion()
     }
 
     pub(crate) fn select_next_completion(&mut self) -> bool {
@@ -1101,6 +1110,18 @@ impl GpuiEditorDocument {
         true
     }
 
+    fn select_completion_index(&mut self, index: usize) -> bool {
+        let Some(popup) = self.completion_popup.as_mut() else {
+            return false;
+        };
+        if index >= popup.items.len() {
+            return false;
+        }
+
+        popup.selected_index = index;
+        true
+    }
+
     fn comment_line_range(&self) -> Option<(u32, u32)> {
         let line_count = self.editor.line_count();
         if line_count == 0 {
@@ -1245,6 +1266,14 @@ impl GpuiEditorComponent {
 
     fn accept_completion(&mut self) -> Result<bool, EditorError> {
         let accepted = self.document.accept_completion()?;
+        if accepted {
+            self.reveal_cursor();
+        }
+        Ok(accepted)
+    }
+
+    fn accept_completion_at(&mut self, index: usize) -> Result<bool, EditorError> {
+        let accepted = self.document.accept_completion_at(index)?;
         if accepted {
             self.reveal_cursor();
         }
@@ -1867,7 +1896,7 @@ where
             .size_full(),
         )
         .when_some(
-            completion_popup(document.completion_popup.as_ref()),
+            completion_popup::<T>(document.completion_popup.as_ref(), cx),
             |this, popup| this.child(popup),
         )
 }
@@ -1914,8 +1943,23 @@ fn status_item(text: String) -> impl IntoElement {
         .child(text)
 }
 
-fn completion_popup(popup: Option<&GpuiEditorCompletionPopup>) -> Option<AnyElement> {
+fn completion_popup<T>(
+    popup: Option<&GpuiEditorCompletionPopup>,
+    cx: &mut Context<'_, T>,
+) -> Option<AnyElement>
+where
+    T: GpuiEditorHost + EntityInputHandler + 'static,
+{
     let popup = popup?;
+    let mut items = Vec::new();
+    for (index, item) in popup.items.iter().enumerate() {
+        items.push(completion_popup_item::<T>(
+            item,
+            index,
+            index == popup.selected_index,
+            cx,
+        ));
+    }
 
     Some(
         div()
@@ -1928,11 +1972,7 @@ fn completion_popup(popup: Option<&GpuiEditorCompletionPopup>) -> Option<AnyElem
             .border_color(rgb(0xcbd5e1))
             .bg(rgb(0xffffff))
             .overflow_hidden()
-            .children(
-                popup.items.iter().enumerate().map(|(index, item)| {
-                    completion_popup_item(item, index == popup.selected_index)
-                }),
-            )
+            .children(items)
             .into_any_element(),
     )
 }
@@ -1943,7 +1983,15 @@ enum CompletionPopupItemState {
     CompletionItem,
 }
 
-fn completion_popup_item(item: &GpuiEditorCompletion, selected: bool) -> impl IntoElement {
+fn completion_popup_item<T>(
+    item: &GpuiEditorCompletion,
+    index: usize,
+    selected: bool,
+    cx: &mut Context<'_, T>,
+) -> AnyElement
+where
+    T: GpuiEditorHost + EntityInputHandler + 'static,
+{
     let state = if selected {
         CompletionPopupItemState::CompletionItemSelected
     } else {
@@ -1982,6 +2030,21 @@ fn completion_popup_item(item: &GpuiEditorCompletion, selected: bool) -> impl In
                 .text_color(rgb(0x64748b))
                 .child(item.kind.clone()),
         )
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(
+                move |this: &mut T, _: &MouseDownEvent, _: &mut Window, cx| {
+                    if this
+                        .editor_component_mut()
+                        .accept_completion_at(index)
+                        .is_ok_and(|accepted| accepted)
+                    {
+                        cx.notify();
+                    }
+                },
+            ),
+        )
+        .into_any_element()
 }
 
 pub(crate) fn find_bar_label(document: &GpuiEditorDocument) -> Option<String> {

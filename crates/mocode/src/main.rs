@@ -478,6 +478,28 @@ mod tests {
     }
 
     #[test]
+    fn daily_completion_click_accepts_item_by_index() {
+        let mut document =
+            GpuiEditorDocument::from_text("scratch.yaml", "mode: \n", TextPosition::new(0, 6));
+
+        assert!(document.accept_completion_at(1).unwrap());
+
+        assert_eq!(document.line_at(0).unwrap().text, "mode: global");
+        assert_eq!(document.cursor, TextPosition::new(0, 12));
+        assert!(document.completion_popup.is_none());
+    }
+
+    #[test]
+    fn daily_completion_click_rejects_out_of_range_index() {
+        let mut document =
+            GpuiEditorDocument::from_text("scratch.yaml", "mode: \n", TextPosition::new(0, 6));
+
+        assert!(!document.accept_completion_at(99).unwrap());
+        assert_eq!(document.line_at(0).unwrap().text, "mode: ");
+        assert_eq!(document.cursor, TextPosition::new(0, 6));
+    }
+
+    #[test]
     fn daily_completion_up_wraps_to_last_item_for_acceptance() {
         let mut document =
             GpuiEditorDocument::from_text("scratch.yaml", "mode: \n", TextPosition::new(0, 6));
@@ -533,10 +555,12 @@ mod tests {
     fn editor_surface_renders_inline_completion_popup() {
         let component_source = include_str!("component.rs");
 
-        assert!(component_source.contains("completion_popup(document.completion_popup.as_ref())"));
+        assert!(component_source.contains("completion_popup::<T>("));
         assert!(component_source.contains("CompletionItemSelected"));
         assert!(component_source.contains("popup.left_px"));
         assert!(component_source.contains("popup.top_px"));
+        assert!(component_source.contains("accept_completion_at(index)"));
+        assert!(component_source.contains("MouseButton::Left"));
     }
 
     #[test]
